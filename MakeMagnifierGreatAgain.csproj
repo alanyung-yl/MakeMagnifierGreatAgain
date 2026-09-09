@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AssemblyName>MakeMagnifierGreatAgain</AssemblyName>
+    <RootNamespace>MakeMagnifierGreatAgain</RootNamespace>
+    <Version>0.5.4</Version>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <OutputPath>bin\$(Configuration)\client\</OutputPath>
+    <RestoreIgnoreFailedSources>true</RestoreIgnoreFailedSources>
+    <SPTRoot Condition="'$(SPTRoot)' == ''">C:\SPT 4.1.3</SPTRoot>
+    <BepInExCorePath>$(SPTRoot)\BepInEx\core</BepInExCorePath>
+    <ManagedPath>$(SPTRoot)\EscapeFromTarkov_Data\Managed</ManagedPath>
+    <SPTPluginOutputDir>$(SPTRoot)\BepInEx\plugins\MakeMagnifierGreatAgain</SPTPluginOutputDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(ManagedPath)\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInExCorePath)\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(BepInExCorePath)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(ManagedPath)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(ManagedPath)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="MakeMagnifierGreatAgainPlugin.cs" />
+    <Compile Include="MakeMagnifierGreatAgainNestedSightAimPatch.cs" />
+    <Compile Include="SkeetIrAspectRatioPatch.cs" />
+  </ItemGroup>
+
+  <Target Name="ValidateSPTRoot" BeforeTargets="ResolveReferences">
+    <Error Condition="!Exists('$(ManagedPath)\Assembly-CSharp.dll')" Text="Assembly-CSharp.dll not found under $(ManagedPath). Check your SPTRoot value." />
+    <Error Condition="!Exists('$(BepInExCorePath)\BepInEx.dll')" Text="BepInEx.dll not found under $(BepInExCorePath). Check your SPTRoot value." />
+    <Error Condition="!Exists('$(BepInExCorePath)\0Harmony.dll')" Text="0Harmony.dll not found under $(BepInExCorePath). Check your SPTRoot value." />
+  </Target>
+
+  <Target Name="CopyClientModToSPT" AfterTargets="Build" Condition="'$(DeployToSPT)' != 'false' And Exists('$(BepInExCorePath)\BepInEx.dll')">
+    <MakeDir Directories="$(SPTPluginOutputDir)" />
+    <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(SPTPluginOutputDir)" />
+    <Copy SourceFiles="$(TargetDir)$(AssemblyName).pdb" DestinationFolder="$(SPTPluginOutputDir)" Condition="Exists('$(TargetDir)$(AssemblyName).pdb')" />
+  </Target>
+</Project>

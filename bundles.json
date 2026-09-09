@@ -1,0 +1,24 @@
+{
+  "manifest": [
+    {
+      "key": "makemagnifiergreatagain/scopes/g33_magnifier_test.bundle",
+      "dependencyKeys": [
+        "shaders",
+        "assets/systems/effects/opticsight/opticsightsmasks.bundle",
+        "assets/content/textures/holemanager/round_spec_mask.bundle"
+      ]
+    },
+    {
+      "key": "makemagnifiergreatagain/scopes/skeet-ir.bundle",
+      "dependencyKeys": [
+        "shaders",
+        "assets/systems/effects/opticsight/opticsightsmasks.bundle",
+        "assets/systems/effects/nightvision.bundle",
+        "assets/systems/effects/nightvision/mask_nv_textures",
+        "assets/systems/effects/collimator.bundle",
+        "assets/content/textures/holemanager/round_spec_mask.bundle",
+        "assets/commonassets/physics/physicsmaterials.bundle"
+      ]
+    }
+  ]
+}

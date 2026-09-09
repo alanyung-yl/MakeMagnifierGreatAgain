@@ -1,0 +1,65 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>MakeMagnifierGreatAgain.Server</RootNamespace>
+    <AssemblyName>MakeMagnifierGreatAgainServer</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <OutputType>Library</OutputType>
+    <Version>0.5.1</Version>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultItems>false</EnableDefaultItems>
+    <NuGetAudit>false</NuGetAudit>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>bin\$(Configuration)\SPT_Runtime\user\mods\MakeMagnifierGreatAgain\</OutputPath>
+    <SPTRoot Condition="'$(SPTRoot)' == ''">C:\SPT 4.1.3</SPTRoot>
+    <SPTRuntimePath>$(SPTRoot)\SPT_Runtime</SPTRuntimePath>
+    <SPTServerModOutputDir>$(SPTRuntimePath)\user\mods\MakeMagnifierGreatAgain</SPTServerModOutputDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="SemanticVersioning">
+      <HintPath>$(SPTRuntimePath)\SemanticVersioning.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SPTarkov.Common">
+      <HintPath>$(SPTRuntimePath)\SPTarkov.Common.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SPTarkov.DI">
+      <HintPath>$(SPTRuntimePath)\SPTarkov.DI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SPTarkov.Server.Core">
+      <HintPath>$(SPTRuntimePath)\SPTarkov.Server.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <PackageReference Include="WTT-ServerCommonLib" Version="3.0.6">
+      <ExcludeAssets>runtime</ExcludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <Compile Include="MakeMagnifierGreatAgainServerMod.cs" />
+    <Compile Include="MakeMagnifierGreatAgainCompatibilityMod.cs" />
+    <ServerResource Include="bundles.json" />
+    <ServerResource Include="bundles\**\*" />
+    <ServerResource Include="db\**\*" />
+  </ItemGroup>
+
+  <Target Name="ValidateSPTRoot" BeforeTargets="ResolveReferences">
+    <Error Condition="!Exists('$(SPTRuntimePath)\SemanticVersioning.dll')" Text="SemanticVersioning.dll not found under $(SPTRuntimePath). Check your SPTRoot value." />
+    <Error Condition="!Exists('$(SPTRuntimePath)\SPTarkov.Common.dll')" Text="SPTarkov.Common.dll not found under $(SPTRuntimePath). Check your SPTRoot value." />
+    <Error Condition="!Exists('$(SPTRuntimePath)\SPTarkov.DI.dll')" Text="SPTarkov.DI.dll not found under $(SPTRuntimePath). Check your SPTRoot value." />
+    <Error Condition="!Exists('$(SPTRuntimePath)\SPTarkov.Server.Core.dll')" Text="SPTarkov.Server.Core.dll not found under $(SPTRuntimePath). Check your SPTRoot value." />
+  </Target>
+
+  <Target Name="CopyServerModToSPT" AfterTargets="Build" Condition="'$(DeployToSPT)' != 'false' And Exists('$(SPTRuntimePath)\SPT.Server.exe')">
+    <MakeDir Directories="$(SPTServerModOutputDir)" />
+    <ItemGroup>
+      <ServerModOutputFiles Include="$(TargetDir)$(AssemblyName).*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ServerModOutputFiles)" DestinationFolder="$(SPTServerModOutputDir)" />
+    <Copy
+      SourceFiles="@(ServerResource)"
+      DestinationFiles="@(ServerResource->'$(SPTServerModOutputDir)\%(Identity)')" />
+  </Target>
+</Project>

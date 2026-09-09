@@ -1,0 +1,28 @@
+# Build outputs
+bin/
+obj/
+
+# Local deployments and packages
+plugin/
+Release/
+*.nupkg
+*.snupkg
+
+# IDE/editor files
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.DotSettings.user
+
+# Logs and operating-system files
+*.log
+.DS_Store
+Thumbs.db
+
+# Local design and AI handoff notes
+docs/
+
