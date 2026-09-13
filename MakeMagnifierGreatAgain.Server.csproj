@@ -42,6 +42,7 @@
     <Compile Include="MakeMagnifierGreatAgainCompatibilityMod.cs" />
     <ServerResource Include="bundles.json" />
     <ServerResource Include="bundles\**\*" />
+    <ServerResource Include="config.json" />
     <ServerResource Include="db\**\*" />
   </ItemGroup>
 

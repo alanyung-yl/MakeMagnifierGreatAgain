@@ -12,11 +12,6 @@ namespace MakeMagnifierGreatAgain
 
         internal static MakeMagnifierGreatAgainPlugin Instance { get; private set; }
 
-        internal static void LogDebug(string message)
-        {
-            Instance?.Logger.LogDebug(message);
-        }
-
         internal static void LogInfo(string message)
         {
             Instance?.Logger.LogInfo(message);
@@ -27,10 +22,7 @@ namespace MakeMagnifierGreatAgain
             Instance?.Logger.LogWarning(message);
         }
 
-        public const string VanillaHhsTemplateId = "5c07dd120db834001c39092d";
         public const string G33TestTemplateId = "31d49a6fcf9e8c1864d7e401";
-        public const string G33TestBundlePath =
-            "makemagnifiergreatagain/scopes/g33_magnifier_test.bundle";
 
         private void Awake()
         {

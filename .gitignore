@@ -28,5 +28,5 @@ docs/
 
 # Private SkeetIR development assets
 db/CustomItems/skeet_ir.json
-bundles/makemagnifiergreatagain/scopes/skeet-ir.bundle
+bundles/skeet-ir.bundle
 unity/

@@ -7,7 +7,7 @@
     "overrideProperties": {
       "ExaminedByDefault": true,
       "Prefab": {
-        "path": "makemagnifiergreatagain/scopes/g33_magnifier_test.bundle",
+        "path": "g33_magnifier_test.bundle",
         "rcid": ""
       },
       "Slots": [

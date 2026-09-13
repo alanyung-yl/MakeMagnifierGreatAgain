@@ -1,7 +1,7 @@
 {
   "manifest": [
     {
-      "key": "makemagnifiergreatagain/scopes/g33_magnifier_test.bundle",
+      "key": "g33_magnifier_test.bundle",
       "dependencyKeys": [
         "shaders",
         "assets/systems/effects/opticsight/opticsightsmasks.bundle",
@@ -9,7 +9,7 @@
       ]
     },
     {
-      "key": "makemagnifiergreatagain/scopes/skeet-ir.bundle",
+      "key": "skeet-ir.bundle",
       "dependencyKeys": [
         "shaders",
         "assets/systems/effects/opticsight/opticsightsmasks.bundle",
