@@ -508,6 +508,7 @@ namespace MakeMagnifierGreatAgain
             internal int LateRefreshFrames;
             internal int LastChildMode = -1;
             internal OpticSight LastChildOptic;
+            internal bool HybridOneXPoseCorrectionWasLogged;
         }
 
         internal sealed class FixedOneXState
@@ -607,6 +608,15 @@ namespace MakeMagnifierGreatAgain
                     && previousState.OriginalChildAim != null)
                 {
                     CopyAimPoint(previousState.OriginalChildAim, previousState.ChildAim);
+                }
+                if (previousState.G33OneXChildAim != null)
+                {
+                    // FindAimTransforms can run while the returning weapon is
+                    // still carrying the last shared optic-camera alignment.
+                    // Restore the retained folded-sight bone before rebuilding
+                    // the replacement front-clip-on state around it.
+                    NestedSightAimPatch.RestoreAimBone(
+                        previousState.G33OneXChildAim.Bone);
                 }
 
                 RestoreChildThermals(previousState);
@@ -723,6 +733,8 @@ namespace MakeMagnifierGreatAgain
             CaptureChildThermals(state);
             if (state.G33OneXChildAim != null)
             {
+                NestedSightAimPatch.RestoreAimBone(
+                    state.G33OneXChildAim.Bone);
                 CaptureProjectedCollimator(state);
             }
             CaptureSkeetOptics(state);
@@ -812,6 +824,50 @@ namespace MakeMagnifierGreatAgain
                     "Restored fixed 1x mod_aim_camera '"
                     + state.ChildAim.Bone.name
                     + "' after shared optic state changed its local position.");
+            }
+        }
+
+        internal static bool UsesHybridOneXAim(FrontClipOnState state)
+        {
+            if (state == null
+                || state.G33OneXChildAim == null
+                || state.G33OneXChildAim.Bone == null
+                || state.ChildCache == null)
+            {
+                return false;
+            }
+
+            var mode = state.ChildCache.CurrentModeId;
+            if (mode < 0 || mode >= state.ChildCache.ModesCount)
+            {
+                return false;
+            }
+
+            var modeInfo = state.ChildCache.GetScopeModeInfo(mode);
+            return modeInfo != null && modeInfo.OpticSight == null;
+        }
+
+        internal static void RestoreHybridOneXAim(FrontClipOnState state)
+        {
+            if (!UsesHybridOneXAim(state)
+                || state.ChildAim == null
+                || state.SkeetAim == null)
+            {
+                return;
+            }
+
+            var corrected = NestedSightAimPatch.RestoreAimBone(
+                state.G33OneXChildAim.Bone);
+            CopyAimPose(state.G33OneXChildAim, state.ChildAim);
+            CopyAimPoint(state.ChildAim, state.SkeetAim);
+
+            if (corrected && !state.HybridOneXPoseCorrectionWasLogged)
+            {
+                state.HybridOneXPoseCorrectionWasLogged = true;
+                MakeMagnifierGreatAgainPlugin.LogInfo(
+                    "Restored hybrid 1x mod_aim_camera '"
+                    + state.G33OneXChildAim.Bone.name
+                    + "' after weapon switching changed its local pose.");
             }
         }
 
@@ -1135,6 +1191,11 @@ namespace MakeMagnifierGreatAgain
             {
                 var usesNestedOneXAim = childModeInfo != null
                     && childModeInfo.OpticSight == null;
+                if (usesNestedOneXAim)
+                {
+                    NestedSightAimPatch.RestoreAimBone(
+                        state.G33OneXChildAim.Bone);
+                }
                 var childAimSource = usesNestedOneXAim
                     ? state.G33OneXChildAim
                     : state.OriginalChildAim;
@@ -1173,6 +1234,7 @@ namespace MakeMagnifierGreatAgain
             // the G33 pose changes, because its folded mode looks through the
             // attached sight instead of the magnifier's aim camera.
             CopyAimPoint(state.ChildAim, state.SkeetAim);
+            RestoreHybridOneXAim(state);
 
             if (thermalUsesSkeetOptic)
             {
@@ -1505,6 +1567,7 @@ namespace MakeMagnifierGreatAgain
                 return;
             }
 
+            RestoreHybridOneXAim(state);
             var forceRefresh = state.LateRefreshFrames > 0;
             EnsureChildOwnsOpticCamera(animation, state, forceRefresh);
             if (forceRefresh)
@@ -1882,6 +1945,22 @@ namespace MakeMagnifierGreatAgain
         [HarmonyPrefix]
         private static bool Prefix(ProceduralWeaponAnimation __instance)
         {
+            SkeetIrSightSelectionPatch.FrontClipOnState frontClipOn;
+            if (SkeetIrSightSelectionPatch.TryGetFrontClipOnState(
+                    __instance,
+                    out frontClipOn)
+                && SkeetIrSightSelectionPatch.UsesHybridOneXAim(frontClipOn)
+                && SkeetIrChildZoomForwardPatch.IsSelectedAim(
+                    __instance,
+                    frontClipOn.SkeetAim))
+            {
+                // The folded custom G33 retains a nested 1x aim point outside
+                // EFT's rebuilt aim list. Protect it explicitly when Skeet's
+                // thermal selector is active after a weapon swap.
+                SkeetIrSightSelectionPatch.RestoreHybridOneXAim(frontClipOn);
+                return false;
+            }
+
             SkeetIrSightSelectionPatch.FixedOneXState fixedOneX;
             if (SkeetIrSightSelectionPatch.TryGetFixedOneXState(
                     __instance,
@@ -2147,6 +2226,15 @@ namespace MakeMagnifierGreatAgain
 
         private void OnCameraPreCull(Camera camera)
         {
+            var preCullCameraManager = CameraManager.Instance;
+            if (_state != null
+                && camera != null
+                && preCullCameraManager != null
+                && ReferenceEquals(preCullCameraManager.Camera, camera))
+            {
+                SkeetIrSightSelectionPatch.RestoreHybridOneXAim(_state);
+            }
+
             if (_state == null
                 || camera == null
                 || !_state.ThermalActive)
