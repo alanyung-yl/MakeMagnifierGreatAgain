@@ -29,6 +29,9 @@ namespace MakeMagnifierGreatAgain
         private static bool _missingOpticSightShaderWasLogged;
         private static bool _opticSightShaderRebindWasLogged;
         private static bool _mergeWasLogged;
+        private static readonly Dictionary<int, ProceduralWeaponAnimation.SightNBone>
+            CollapsedG33ChildAims =
+                new Dictionary<int, ProceduralWeaponAnimation.SightNBone>();
 
         [HarmonyPostfix]
         private static void Postfix(ProceduralWeaponAnimation __instance)
@@ -38,11 +41,14 @@ namespace MakeMagnifierGreatAgain
                 return;
             }
 
+            CollapsedG33ChildAims.Remove(__instance.GetInstanceID());
             var magnifierAim = FindMagnifierAim(__instance);
             var removedAimPoints = 0;
             if (magnifierAim != null)
             {
                 var magnifierRoot = magnifierAim.ScopePrefabCache.transform;
+                var immediateChild = FindImmediateChildScope(magnifierRoot);
+                PreserveAimBone(magnifierAim.Bone);
                 RestoreVanillaOpticSightShader(magnifierAim.ScopePrefabCache);
                 RestoreVanillaBackLensShader(magnifierRoot);
 
@@ -54,6 +60,13 @@ namespace MakeMagnifierGreatAgain
                         || !candidate.Bone.IsChildOf(magnifierRoot))
                     {
                         continue;
+                    }
+
+                    if (immediateChild != null
+                        && ReferenceEquals(candidate.ScopePrefabCache, immediateChild))
+                    {
+                        PreserveAimBone(candidate.Bone);
+                        CollapsedG33ChildAims[__instance.GetInstanceID()] = candidate;
                     }
 
                     __instance.ScopeAimTransforms.RemoveAt(index);
@@ -184,6 +197,53 @@ namespace MakeMagnifierGreatAgain
         {
             return name != null
                 && name.StartsWith(G33PrefabName, StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static void PreserveAimBone(Transform bone)
+        {
+            if (bone == null)
+            {
+                return;
+            }
+
+            var guard = bone.GetComponent<SkeetIrAimBonePoseGuard>();
+            if (guard == null)
+            {
+                guard = bone.gameObject.AddComponent<SkeetIrAimBonePoseGuard>();
+            }
+            guard.Capture();
+        }
+
+        internal static void RestoreAimBone(Transform bone)
+        {
+            var guard = bone != null
+                ? bone.GetComponent<SkeetIrAimBonePoseGuard>()
+                : null;
+            if (guard != null)
+            {
+                guard.Restore();
+            }
+        }
+
+        internal static ProceduralWeaponAnimation.SightNBone FindCollapsedG33ChildAim(
+            ProceduralWeaponAnimation animation,
+            ScopePrefabCache g33Cache)
+        {
+            ProceduralWeaponAnimation.SightNBone childAim;
+            if (animation == null
+                || g33Cache == null
+                || !IsG33RootName(g33Cache.transform.name)
+                || !CollapsedG33ChildAims.TryGetValue(
+                    animation.GetInstanceID(),
+                    out childAim)
+                || childAim == null
+                || childAim.Bone == null
+                || !childAim.Bone.IsChildOf(g33Cache.transform))
+            {
+                return null;
+            }
+
+            return childAim;
         }
 
         internal static bool IsSkeetIrRootName(string name)
@@ -418,6 +478,7 @@ namespace MakeMagnifierGreatAgain
     {
         internal sealed class FrontClipOnState
         {
+            internal ProceduralWeaponAnimation Animation;
             internal ProceduralWeaponAnimation.SightNBone SkeetAim;
             internal ProceduralWeaponAnimation.SightNBone OriginalSkeetAim;
             internal SightComponent SkeetMod;
@@ -425,6 +486,18 @@ namespace MakeMagnifierGreatAgain
             internal ProceduralWeaponAnimation.SightNBone ChildAim;
             internal ScopePrefabCache ChildCache;
             internal ScopeThermalVisionData ThermalData;
+            internal ProceduralWeaponAnimation.SightNBone OriginalChildAim;
+            internal ProceduralWeaponAnimation.SightNBone G33OneXChildAim;
+            internal Material G33LensMaterial;
+            internal Texture G33OriginalMarkTexture;
+            internal Texture G33ThermalMarkSource;
+            internal Texture2D G33ThermalMarkTexture;
+            internal float G33ThermalMarkScale = 1f;
+            internal Color G33OriginalLensColor;
+            internal float G33OriginalLensHdr;
+            internal bool G33LensHasColor;
+            internal bool G33LensHasHdr;
+            internal bool G33ThermalReticleApplied;
             internal readonly Dictionary<OpticSight, ScopeThermalVisionData>
                 OriginalChildThermals =
                     new Dictionary<OpticSight, ScopeThermalVisionData>();
@@ -434,15 +507,18 @@ namespace MakeMagnifierGreatAgain
                 new Dictionary<Renderer, bool>();
             internal bool Initialized;
             internal bool ThermalActive;
+            internal bool ThermalUsesSkeetOptic;
             internal bool CameraRefreshPending;
             internal int LateRefreshFrames;
+            internal int LastChildMode = -1;
             internal OpticSight LastChildOptic;
         }
 
         private static readonly Dictionary<int, FrontClipOnState> FrontClipOnStates =
             new Dictionary<int, FrontClipOnState>();
         private static readonly FieldInfo OpticUpdaterInstanceIdField =
-            AccessTools.Field(typeof(OpticComponentUpdater), "int_0");
+            AccessTools.Field(typeof(OpticComponentUpdater), "cachedOpticId")
+            ?? AccessTools.Field(typeof(OpticComponentUpdater), "int_0");
         private static readonly MethodInfo ApplyLiveThermalStateMethod =
             AccessTools.Method(
                 typeof(ThermalVision),
@@ -455,6 +531,9 @@ namespace MakeMagnifierGreatAgain
         private static bool _missingChildMarkTextureWasLogged;
         private static bool _frontClipOnConfiguredWasLogged;
         private static bool _oneXChildRouteWasLogged;
+        private static bool _hybridOneXRouteWasLogged;
+        private static bool _g33OneXAimRouteWasLogged;
+        private static bool _g33ThermalReticleRouteWasLogged;
         private static bool _missingUpdaterFieldWasLogged;
         private static bool _missingLiveThermalMethodWasLogged;
 
@@ -488,15 +567,19 @@ namespace MakeMagnifierGreatAgain
                 }
 
                 if (previousState.SkeetAim != null
-                    && previousState.OriginalSkeetAim != null
-                    && ReferenceEquals(
-                        previousState.SkeetAim.ScopePrefabCache,
-                        previousState.ChildCache))
+                    && previousState.OriginalSkeetAim != null)
                 {
                     CopyAimPoint(previousState.OriginalSkeetAim, previousState.SkeetAim);
                 }
+                if (previousState.ChildAim != null
+                    && previousState.OriginalChildAim != null)
+                {
+                    CopyAimPoint(previousState.OriginalChildAim, previousState.ChildAim);
+                }
 
                 RestoreChildThermals(previousState);
+                SetG33ThermalReticle(previousState, false);
+                DestroyG33ThermalMarkTexture(previousState);
                 RestoreSkeetOptics(previousState);
                 FrontClipOnStates.Remove(animationId);
                 restoredPreviousState = true;
@@ -509,11 +592,17 @@ namespace MakeMagnifierGreatAgain
             }
 
             var skeetCache = skeetAim.ScopePrefabCache;
+            var lensRuntime = skeetCache.GetComponent<SkeetIrLensVisibilityRuntime>();
+            if (lensRuntime == null)
+            {
+                lensRuntime = skeetCache.gameObject.AddComponent<SkeetIrLensVisibilityRuntime>();
+            }
+            lensRuntime.Initialize(animation, skeetAim);
+
             var childCache = NestedSightAimPatch.FindImmediateChildScope(
                 skeetCache.transform);
 
-            if (childCache == null
-                || NestedSightAimPatch.IsG33RootName(childCache.transform.name))
+            if (childCache == null)
             {
                 return restoredPreviousState;
             }
@@ -534,6 +623,9 @@ namespace MakeMagnifierGreatAgain
             {
                 return restoredPreviousState;
             }
+
+            NestedSightAimPatch.PreserveAimBone(skeetAim.Bone);
+            NestedSightAimPatch.PreserveAimBone(childAim.Bone);
 
             if (!childCache.HasOptics
                 || !IsMagnifiedChild(childAim.Mod, childCache))
@@ -566,16 +658,23 @@ namespace MakeMagnifierGreatAgain
 
             var state = new FrontClipOnState
             {
+                Animation = animation,
                 SkeetAim = skeetAim,
                 SkeetMod = skeetAim.Mod,
                 SkeetCache = skeetCache,
                 ChildAim = childAim,
                 ChildCache = childCache,
-                ThermalData = thermalData
+                ThermalData = thermalData,
+                OriginalChildAim = new ProceduralWeaponAnimation.SightNBone(),
+                G33OneXChildAim = NestedSightAimPatch.FindCollapsedG33ChildAim(
+                    animation,
+                    childCache)
             };
 
             CaptureChildThermals(state);
+            CaptureG33LensMaterial(state);
             CaptureSkeetOptics(state);
+            CopyAimPoint(childAim, state.OriginalChildAim);
             state.OriginalSkeetAim =
                 new ProceduralWeaponAnimation.SightNBone();
             CopyAimPoint(skeetAim, state.OriginalSkeetAim);
@@ -604,8 +703,8 @@ namespace MakeMagnifierGreatAgain
                 _frontClipOnConfiguredWasLogged = true;
                 MakeMagnifierGreatAgainPlugin.LogInfo(
                     "Configured Skeet-IR as a front clip-on for direct magnified child "
-                    + $"'{childCache.transform.name}'; both Skeet selector states now use "
-                    + "the child optic's aim camera, lens, reticle, and zoom handler.");
+                    + $"'{childCache.transform.name}'; optic modes use the child PiP, "
+                    + "while hybrid collimator modes use Skeet's thermal PiP.");
             }
 
             return true;
@@ -719,6 +818,213 @@ namespace MakeMagnifierGreatAgain
             }
         }
 
+        private static void CaptureG33LensMaterial(FrontClipOnState state)
+        {
+            if (state.G33OneXChildAim == null || !state.ChildCache.HasOptics)
+            {
+                return;
+            }
+
+            var optic = state.ChildCache.FirstOptic;
+            var renderer = optic != null ? optic.LensRenderer : null;
+            if (renderer == null)
+            {
+                return;
+            }
+
+            var material = renderer.material;
+            if (material == null || !material.HasProperty("_MarkTex"))
+            {
+                return;
+            }
+
+            state.G33LensMaterial = material;
+            state.G33OriginalMarkTexture = material.GetTexture("_MarkTex");
+            state.G33LensHasColor = material.HasProperty("_Color");
+            if (state.G33LensHasColor)
+            {
+                state.G33OriginalLensColor = material.GetColor("_Color");
+            }
+
+            state.G33LensHasHdr = material.HasProperty("_HDR");
+            if (state.G33LensHasHdr)
+            {
+                state.G33OriginalLensHdr = material.GetFloat("_HDR");
+            }
+        }
+
+        private static void SetG33ThermalReticle(
+            FrontClipOnState state,
+            bool enabled)
+        {
+            var targetMaterial = state.G33LensMaterial;
+            if (targetMaterial == null)
+            {
+                return;
+            }
+
+            if (!enabled)
+            {
+                if (!state.G33ThermalReticleApplied)
+                {
+                    return;
+                }
+
+                targetMaterial.SetTexture("_MarkTex", state.G33OriginalMarkTexture);
+                if (state.G33LensHasColor)
+                {
+                    targetMaterial.SetColor("_Color", state.G33OriginalLensColor);
+                }
+                if (state.G33LensHasHdr)
+                {
+                    targetMaterial.SetFloat("_HDR", state.G33OriginalLensHdr);
+                }
+
+                state.G33ThermalReticleApplied = false;
+                return;
+            }
+
+            var nestedSight = NestedSightAimPatch.FindImmediateChildScope(
+                state.ChildCache.transform);
+            var collimator = nestedSight != null && nestedSight.HasCollimators
+                ? nestedSight.FirstCollimator
+                : null;
+            var sourceRenderer = collimator != null
+                ? collimator.CollimatorMeshRenderer
+                : null;
+            var sourceMaterial = collimator != null
+                ? collimator.CollimatorMaterial
+                : null;
+            if (sourceMaterial == null && sourceRenderer != null)
+            {
+                sourceMaterial = sourceRenderer.sharedMaterial;
+            }
+
+            var markTexture = sourceMaterial != null
+                && sourceMaterial.HasProperty("_MarkTex")
+                ? sourceMaterial.GetTexture("_MarkTex")
+                : null;
+            if (markTexture == null)
+            {
+                return;
+            }
+
+            var markScale = sourceMaterial.HasProperty("_MarkScale")
+                ? sourceMaterial.GetFloat("_MarkScale")
+                : 1f;
+            if (markScale <= 0f)
+            {
+                markScale = 1f;
+            }
+
+            targetMaterial.SetTexture(
+                "_MarkTex",
+                GetG33ThermalMarkTexture(state, markTexture, markScale));
+            if (state.G33LensHasColor && sourceMaterial.HasProperty("_Color"))
+            {
+                targetMaterial.SetColor("_Color", sourceMaterial.GetColor("_Color"));
+            }
+            if (state.G33LensHasHdr && sourceMaterial.HasProperty("_HDR"))
+            {
+                targetMaterial.SetFloat("_HDR", sourceMaterial.GetFloat("_HDR"));
+            }
+
+            state.G33ThermalReticleApplied = true;
+            if (!_g33ThermalReticleRouteWasLogged)
+            {
+                _g33ThermalReticleRouteWasLogged = true;
+                MakeMagnifierGreatAgainPlugin.LogInfo(
+                    "Custom G33 thermal 3x now uses the attached sight's mark on "
+                    + "the G33 optic lens while its live collimator plane is omitted "
+                    + "from the thermal camera pass; the copied mark preserves the "
+                    + $"collimator's {markScale:0.###} scale.");
+            }
+        }
+
+        private static Texture GetG33ThermalMarkTexture(
+            FrontClipOnState state,
+            Texture source,
+            float visualScale)
+        {
+            if (Mathf.Approximately(visualScale, 1f))
+            {
+                DestroyG33ThermalMarkTexture(state);
+                return source;
+            }
+
+            if (state.G33ThermalMarkTexture != null
+                && ReferenceEquals(state.G33ThermalMarkSource, source)
+                && Mathf.Approximately(state.G33ThermalMarkScale, visualScale))
+            {
+                return state.G33ThermalMarkTexture;
+            }
+
+            DestroyG33ThermalMarkTexture(state);
+
+            var width = Math.Max(1, source.width);
+            var height = Math.Max(1, source.height);
+            var temporary = RenderTexture.GetTemporary(
+                width,
+                height,
+                0,
+                RenderTextureFormat.ARGB32,
+                RenderTextureReadWrite.Default);
+            var previousActive = RenderTexture.active;
+            var previousWrapMode = source.wrapMode;
+
+            try
+            {
+                // Collimator marks are authored with _MarkScale, whereas
+                // OpticSight's baked mark pass has no equivalent property.
+                // Resample only the copied texture so the live thermal image,
+                // masks, and G33 camera calibration remain untouched.
+                source.wrapMode = TextureWrapMode.Clamp;
+                var sampleScale = 1f / visualScale;
+                var sampleOffset = (1f - sampleScale) * 0.5f;
+                Graphics.Blit(
+                    source,
+                    temporary,
+                    new Vector2(sampleScale, sampleScale),
+                    new Vector2(sampleOffset, sampleOffset));
+
+                RenderTexture.active = temporary;
+                var scaled = new Texture2D(
+                    width,
+                    height,
+                    TextureFormat.RGBA32,
+                    false);
+                scaled.name = source.name + "_MMGA_G33_Thermal";
+                scaled.hideFlags = HideFlags.HideAndDontSave;
+                scaled.filterMode = source.filterMode;
+                scaled.wrapMode = TextureWrapMode.Clamp;
+                scaled.ReadPixels(new Rect(0f, 0f, width, height), 0, 0);
+                scaled.Apply(false, true);
+
+                state.G33ThermalMarkSource = source;
+                state.G33ThermalMarkTexture = scaled;
+                state.G33ThermalMarkScale = visualScale;
+                return scaled;
+            }
+            finally
+            {
+                source.wrapMode = previousWrapMode;
+                RenderTexture.active = previousActive;
+                RenderTexture.ReleaseTemporary(temporary);
+            }
+        }
+
+        private static void DestroyG33ThermalMarkTexture(FrontClipOnState state)
+        {
+            if (state.G33ThermalMarkTexture != null)
+            {
+                UnityEngine.Object.Destroy(state.G33ThermalMarkTexture);
+            }
+
+            state.G33ThermalMarkSource = null;
+            state.G33ThermalMarkTexture = null;
+            state.G33ThermalMarkScale = 1f;
+        }
+
         private static void CaptureSkeetOptics(FrontClipOnState state)
         {
             for (var mode = 0; mode < state.SkeetCache.ModesCount; mode++)
@@ -779,19 +1085,82 @@ namespace MakeMagnifierGreatAgain
             bool thermalActive,
             bool force = false)
         {
+            var childMode = state.ChildCache.CurrentModeId;
+            var childModeInfo = childMode >= 0
+                && childMode < state.ChildCache.ModesCount
+                ? state.ChildCache.GetScopeModeInfo(childMode)
+                : null;
+            if (state.G33OneXChildAim != null)
+            {
+                var usesNestedOneXAim = childModeInfo != null
+                    && childModeInfo.OpticSight == null;
+                var childAimSource = usesNestedOneXAim
+                    ? state.G33OneXChildAim
+                    : state.OriginalChildAim;
+                CopyAimPose(childAimSource, state.ChildAim);
+
+                if (usesNestedOneXAim && !_g33OneXAimRouteWasLogged)
+                {
+                    _g33OneXAimRouteWasLogged = true;
+                    MakeMagnifierGreatAgainPlugin.LogInfo(
+                        "Custom G33 1x ADS now uses nested child mod_aim_camera '"
+                        + state.G33OneXChildAim.Bone.name + "'.");
+                }
+            }
+            var thermalUsesSkeetOptic = thermalActive
+                && childModeInfo != null
+                && childModeInfo.OpticSight == null;
+            if (childModeInfo != null && childModeInfo.OpticSight == null)
+            {
+                NestedSightAimPatch.RestoreAimBone(state.ChildAim.Bone);
+            }
             var changed = force
                 || !state.Initialized
-                || state.ThermalActive != thermalActive;
+                || state.ThermalActive != thermalActive
+                || state.ThermalUsesSkeetOptic != thermalUsesSkeetOptic
+                || state.LastChildMode != childMode;
 
             state.Initialized = true;
             state.ThermalActive = thermalActive;
+            state.ThermalUsesSkeetOptic = thermalUsesSkeetOptic;
+            state.LastChildMode = childMode;
             ApplyMode(state.SkeetCache, thermalActive ? 0 : 1);
+
+            // Keep the selector entry a stable proxy for the child sight. EFT
+            // builds its optic list and camera-depth state from these fields;
+            // changing Mod/ScopePrefabCache later corrupts hybrid 1x ADS. Only
+            // the G33 pose changes, because its folded mode looks through the
+            // attached sight instead of the magnifier's aim camera.
+            CopyAimPoint(state.ChildAim, state.SkeetAim);
+
+            SetG33ThermalReticle(
+                state,
+                ShouldUseG33ThermalReticle(state));
+
+            if (thermalUsesSkeetOptic)
+            {
+                // The hybrid has no optic camera in this mode. Leave the aim
+                // entry owned by the hybrid and activate Skeet's established
+                // thermal optic directly; this is the same PiP source used by
+                // the confirmed fixed-1x path without changing ADS ownership.
+                ConfigureThermalReticle(state.SkeetCache);
+
+                if (!_hybridOneXRouteWasLogged)
+                {
+                    _hybridOneXRouteWasLogged = true;
+                    MakeMagnifierGreatAgainPlugin.LogInfo(
+                        "Using Skeet-IR's thermal optic for hybrid 1x mode on '"
+                        + state.ChildCache.transform.name
+                        + "'; ADS ownership remains with the hybrid sight.");
+                }
+            }
 
             foreach (var pair in state.OriginalChildThermals)
             {
                 if (pair.Key != null && pair.Key.ScopeData != null)
                 {
                     pair.Key.ScopeData.ThermalVisionData = thermalActive
+                        && !thermalUsesSkeetOptic
                         ? state.ThermalData
                         : pair.Value;
                 }
@@ -810,6 +1179,36 @@ namespace MakeMagnifierGreatAgain
 
         }
 
+        private static void CopyAimPose(
+            ProceduralWeaponAnimation.SightNBone source,
+            ProceduralWeaponAnimation.SightNBone destination)
+        {
+            destination.Bone = source.Bone;
+            destination.Rotation = source.Rotation;
+            destination.LeftStanceRotation = source.LeftStanceRotation;
+            destination.EyeGuardShift = source.EyeGuardShift;
+        }
+
+        private static bool ShouldUseG33ThermalReticle(FrontClipOnState state)
+        {
+            if (state == null
+                || !state.ThermalActive
+                || state.ThermalUsesSkeetOptic
+                || state.G33OneXChildAim == null
+                || state.Animation == null
+                || !state.Animation.IsAiming
+                || !state.Animation.FirstPersonPointOfView)
+            {
+                return false;
+            }
+
+            var mode = state.ChildCache.CurrentModeId;
+            var modeInfo = mode >= 0 && mode < state.ChildCache.ModesCount
+                ? state.ChildCache.GetScopeModeInfo(mode)
+                : null;
+            return modeInfo != null && modeInfo.OpticSight != null;
+        }
+
         private static void SetSkeetOpticLensVisibility(FrontClipOnState state)
         {
             foreach (var pair in state.OriginalSkeetOpticStates)
@@ -820,18 +1219,25 @@ namespace MakeMagnifierGreatAgain
                     continue;
                 }
 
-                // The child owns the PiP in both selector states. Only hide
-                // Skeet's physical lens while thermal is inline.
-                optic.enabled = false;
-                optic.LensFade(state.ThermalActive);
+                var skeetOwnsThermalPip = state.ThermalUsesSkeetOptic
+                    && state.Animation != null
+                    && state.Animation.IsAiming
+                    && state.Animation.FirstPersonPointOfView
+                    && ReferenceEquals(
+                        state.SkeetCache.CurrentModOpticSight,
+                        optic);
+                optic.enabled = skeetOwnsThermalPip;
+                optic.LensFade(!skeetOwnsThermalPip && state.ThermalActive);
                 if (optic.LensRenderer != null)
                 {
                     bool originallyEnabled;
-                    optic.LensRenderer.enabled = !state.ThermalActive
-                        && state.OriginalSkeetLensStates.TryGetValue(
+                    var wasOriginallyEnabled =
+                        state.OriginalSkeetLensStates.TryGetValue(
                             optic.LensRenderer,
                             out originallyEnabled)
                         && originallyEnabled;
+                    optic.LensRenderer.enabled = skeetOwnsThermalPip
+                        || (!state.ThermalActive && wasOriginallyEnabled);
                 }
             }
         }
@@ -841,10 +1247,20 @@ namespace MakeMagnifierGreatAgain
             FrontClipOnState state,
             bool forceRefresh = false)
         {
+            if (state.ThermalUsesSkeetOptic)
+            {
+                EnsureSkeetOwnsOpticCamera(animation, state, forceRefresh);
+                return;
+            }
+
             if (!animation.IsAiming
                 || !animation.FirstPersonPointOfView
-                || (!ReferenceEquals(animation.CurrentScope, state.SkeetAim)
-                    && !ReferenceEquals(animation.CurrentScope, state.ChildAim)))
+                || (!SkeetIrChildZoomForwardPatch.IsSelectedAim(
+                        animation,
+                        state.SkeetAim)
+                    && !SkeetIrChildZoomForwardPatch.IsSelectedAim(
+                        animation,
+                        state.ChildAim)))
             {
                 return;
             }
@@ -949,6 +1365,75 @@ namespace MakeMagnifierGreatAgain
                 + $"liveEnabled={(liveThermal != null && liveThermal.enabled)}, "
                 + $"liveOn={(liveThermal != null && liveThermal.On)}, "
                 + $"adjustable={childOptic.CameraData.IsAdjustableOptic}).");
+        }
+
+        private static void EnsureSkeetOwnsOpticCamera(
+            ProceduralWeaponAnimation animation,
+            FrontClipOnState state,
+            bool forceRefresh)
+        {
+            if (!animation.IsAiming || !animation.FirstPersonPointOfView)
+            {
+                SetSkeetOpticLensVisibility(state);
+                return;
+            }
+
+            var skeetOptic = state.SkeetCache.CurrentModOpticSight;
+            if (skeetOptic == null
+                || skeetOptic.ScopeData == null
+                || skeetOptic.CameraData == null)
+            {
+                return;
+            }
+
+            var cameraClass = CameraManager.Instance;
+            if (cameraClass == null)
+            {
+                return;
+            }
+
+            var manager = cameraClass.OpticCameraManager;
+            var needsRefresh = state.CameraRefreshPending
+                || forceRefresh
+                || !ReferenceEquals(state.LastChildOptic, skeetOptic)
+                || !ReferenceEquals(manager.CurrentOpticSight, skeetOptic);
+
+            if (needsRefresh
+                && manager.Updater != null
+                && OpticUpdaterInstanceIdField != null)
+            {
+                OpticUpdaterInstanceIdField.SetValue(manager.Updater, int.MinValue);
+            }
+
+            if (!skeetOptic.enabled)
+            {
+                skeetOptic.enabled = true;
+            }
+
+            if (needsRefresh)
+            {
+                manager.OnOpticSightEnabled(skeetOptic);
+            }
+
+            var liveThermal = SynchronizeLiveThermalState(
+                manager.Camera != null
+                    ? manager.Camera.GetComponent<ThermalVision>()
+                    : null,
+                true,
+                needsRefresh);
+
+            skeetOptic.LensFade(false);
+            state.LastChildOptic = skeetOptic;
+            state.CameraRefreshPending = false;
+
+            if (needsRefresh)
+            {
+                MakeMagnifierGreatAgainPlugin.LogInfo(
+                    "Refreshed hybrid 1x thermal PiP through Skeet-IR's optic "
+                    + $"for '{state.ChildCache.transform.name}' "
+                    + $"(liveEnabled={(liveThermal != null && liveThermal.enabled)}, "
+                    + $"liveOn={(liveThermal != null && liveThermal.On)}).");
+            }
         }
 
         private static ThermalVision SynchronizeLiveThermalState(
@@ -1079,7 +1564,9 @@ namespace MakeMagnifierGreatAgain
             {
                 ApplyFrontClipOnState(
                     frontClipOn,
-                    ReferenceEquals(__instance.CurrentScope, frontClipOn.SkeetAim));
+                    SkeetIrChildZoomForwardPatch.IsSelectedAim(
+                        __instance,
+                        frontClipOn.SkeetAim));
                 return;
             }
 
@@ -1094,7 +1581,9 @@ namespace MakeMagnifierGreatAgain
             // Let EFT change AimIndex normally. method_1 runs after that state
             // has changed, so it remains the last known working place to match
             // the physical Skeet mode to the selected aim point.
-            var selectedSkeet = ReferenceEquals(__instance.CurrentScope, skeetAim);
+            var selectedSkeet = SkeetIrChildZoomForwardPatch.IsSelectedAim(
+                __instance,
+                skeetAim);
             if (selectedSkeet)
             {
                 ConfigureThermalReticle(skeetCache);
@@ -1111,6 +1600,9 @@ namespace MakeMagnifierGreatAgain
             if (TryGetFrontClipOnState(__instance, out frontClipOn)
                 && IsActiveFrontClipOnState(__instance, frontClipOn))
             {
+                SetG33ThermalReticle(
+                    frontClipOn,
+                    ShouldUseG33ThermalReticle(frontClipOn));
                 SetSkeetOpticLensVisibility(frontClipOn);
                 EnsureChildOwnsOpticCamera(__instance, frontClipOn);
             }
@@ -1299,6 +1791,122 @@ namespace MakeMagnifierGreatAgain
 
     }
 
+    internal sealed class SkeetIrAimBonePoseGuard : MonoBehaviour
+    {
+        private bool _captured;
+        private Vector3 _localPosition;
+
+        internal void Capture()
+        {
+            if (_captured)
+            {
+                return;
+            }
+
+            _localPosition = transform.localPosition;
+            _captured = true;
+        }
+
+        internal void Restore()
+        {
+            if (_captured)
+            {
+                transform.localPosition = _localPosition;
+            }
+        }
+    }
+
+    /// <summary>
+    /// EFT aligns an optic by writing its calculated optic-camera position
+    /// directly into the selected aim bone. That is invalid when a collimator
+    /// mode has no active optic, or when Skeet borrows a child's aim bone.
+    /// Restore the prefab pose and skip that write in those two cases.
+    /// </summary>
+    [HarmonyPatch(
+        typeof(ProceduralWeaponAnimation),
+        nameof(ProceduralWeaponAnimation.OpticLookAtGlobal))]
+    internal static class SkeetIrAimBoneAlignmentPatch
+    {
+        private static readonly HashSet<int> LoggedCaches = new HashSet<int>();
+
+        [HarmonyPrefix]
+        private static bool Prefix(ProceduralWeaponAnimation __instance)
+        {
+            var aim = __instance != null ? __instance.CurrentScope : null;
+            var guard = aim != null && aim.Bone != null
+                ? aim.Bone.GetComponent<SkeetIrAimBonePoseGuard>()
+                : null;
+            var cache = aim != null ? aim.ScopePrefabCache : null;
+            if (guard == null || cache == null)
+            {
+                return true;
+            }
+
+            var boneOwner = aim.Bone.GetComponentInParent<ScopePrefabCache>();
+            if (cache.CurrentModHasOptics && ReferenceEquals(cache, boneOwner))
+            {
+                return true;
+            }
+
+            guard.Restore();
+            if (LoggedCaches.Add(cache.GetInstanceID()))
+            {
+                MakeMagnifierGreatAgainPlugin.LogInfo(
+                    "Protected mod_aim_camera pose for '" + cache.transform.name
+                    + $"' (mode={cache.CurrentModeId}, borrowed={boneOwner != cache}).");
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The Skeet lens shader composites the shared optic texture, which still
+    /// contains its last frame after ADS ends. Gate only that display surface;
+    /// the physical clip-on body remains visible when folded aside.
+    /// </summary>
+    internal sealed class SkeetIrLensVisibilityRuntime : MonoBehaviour
+    {
+        private const string VisibleProperty = "_MMGA_ThermalVisible";
+        private ProceduralWeaponAnimation _animation;
+        private ProceduralWeaponAnimation.SightNBone _skeetAim;
+        private Material _lensMaterial;
+
+        internal void Initialize(
+            ProceduralWeaponAnimation animation,
+            ProceduralWeaponAnimation.SightNBone skeetAim)
+        {
+            _animation = animation;
+            _skeetAim = skeetAim;
+            var optic = skeetAim.ScopePrefabCache.FirstOptic;
+            var renderer = optic != null ? optic.LensRenderer : null;
+            _lensMaterial = renderer != null ? renderer.material : null;
+            SetVisible(false);
+        }
+
+        private void LateUpdate()
+        {
+            SetVisible(_animation != null
+                && _animation.IsAiming
+                && _animation.FirstPersonPointOfView
+                && SkeetIrChildZoomForwardPatch.IsSelectedAim(
+                    _animation,
+                    _skeetAim));
+        }
+
+        private void OnDisable()
+        {
+            SetVisible(false);
+        }
+
+        private void SetVisible(bool visible)
+        {
+            if (_lensMaterial != null && _lensMaterial.HasProperty(VisibleProperty))
+            {
+                _lensMaterial.SetFloat(VisibleProperty, visible ? 1f : 0f);
+            }
+        }
+    }
+
     /// <summary>
     /// Finishes the clip-on transition after EFT's same-frame optic updates
     /// and prevents the child optic camera from photographing the physical
@@ -1307,6 +1915,7 @@ namespace MakeMagnifierGreatAgain
     /// </summary>
     internal sealed class SkeetIrFrontClipOnRuntime : MonoBehaviour
     {
+        private static bool _g33CollimatorSuppressionWasLogged;
         private ProceduralWeaponAnimation _animation;
         private SkeetIrSightSelectionPatch.FrontClipOnState _state;
         private Renderer[] _occludingRenderers = new Renderer[0];
@@ -1334,6 +1943,31 @@ namespace MakeMagnifierGreatAgain
                 }
 
                 renderers.Add(renderer);
+            }
+
+            if (NestedSightAimPatch.IsG33RootName(
+                    state.ChildCache.transform.name))
+            {
+                var nestedSight = NestedSightAimPatch.FindImmediateChildScope(
+                    state.ChildCache.transform);
+                var collimator = nestedSight != null && nestedSight.HasCollimators
+                    ? nestedSight.FirstCollimator
+                    : null;
+                var collimatorRenderer = collimator != null
+                    ? collimator.CollimatorMeshRenderer
+                    : null;
+                if (collimatorRenderer != null)
+                {
+                    renderers.Add(collimatorRenderer);
+                    if (!_g33CollimatorSuppressionWasLogged)
+                    {
+                        _g33CollimatorSuppressionWasLogged = true;
+                        MakeMagnifierGreatAgainPlugin.LogInfo(
+                            "Custom G33 thermal 3x will omit nested collimator renderer '"
+                            + collimatorRenderer.name
+                            + "' only while the optic camera renders.");
+                    }
+                }
             }
 
             _occludingRenderers = renderers.ToArray();
@@ -1500,7 +2134,7 @@ namespace MakeMagnifierGreatAgain
         }
 
         [HarmonyPrefix]
-        private static void Prefix(
+        private static bool Prefix(
             EFT.Player.FirearmController __instance,
             object[] __args)
         {
@@ -1519,58 +2153,115 @@ namespace MakeMagnifierGreatAgain
                 || _stateModeField == null
                 || _stateScopeIndexField == null)
             {
-                return;
+                return true;
             }
 
             ScopePrefabCache childCache;
             SightComponent skeetSight;
+            bool thermalSelected;
+            ProceduralWeaponAnimation.SightNBone childAim;
             SkeetIrSightSelectionPatch.FrontClipOnState frontClipOn;
             if (SkeetIrSightSelectionPatch.TryGetFrontClipOnState(
                 animation,
                 out frontClipOn))
             {
-                if (!ReferenceEquals(animation.CurrentScope, frontClipOn.SkeetAim))
-                {
-                    return;
-                }
-
+                thermalSelected = IsSelectedAim(animation, frontClipOn.SkeetAim);
                 childCache = frontClipOn.ChildCache;
                 skeetSight = frontClipOn.SkeetMod;
+                childAim = frontClipOn.ChildAim;
             }
             else
             {
                 var skeetAim = NestedSightAimPatch.FindSkeetIrAim(animation);
-                if (skeetAim == null
-                    || !ReferenceEquals(animation.CurrentScope, skeetAim))
+                if (skeetAim == null)
                 {
-                    return;
+                    return true;
                 }
 
+                thermalSelected = IsSelectedAim(animation, skeetAim);
                 childCache = NestedSightAimPatch.FindImmediateChildScope(
                     skeetAim.ScopePrefabCache.transform);
                 skeetSight = skeetAim.Mod;
+                childAim = FindAim(animation, childCache);
+            }
+
+            if (skeetSight == null)
+            {
+                return true;
+            }
+
+            var skeetItemId = skeetSight.Item.Id.ToString();
+            for (var index = 0; index < states.Length; index++)
+            {
+                var state = states.GetValue(index);
+                if (state == null
+                    || !string.Equals(
+                        _stateIdField.GetValue(state) as string,
+                        skeetItemId,
+                        StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                // Change Zoom must not persist Skeet's physical folded mode
+                // as a sight zoom mode, including when the child is selected.
+                var requestedMode = (int)_stateModeField.GetValue(state);
+                if (requestedMode != 0)
+                {
+                    MakeMagnifierGreatAgainPlugin.LogInfo(
+                        $"Ignored Change Zoom mode {requestedMode} for Skeet-IR; "
+                        + "Switch Sight alone controls its physical mode.");
+                }
+                _stateModeField.SetValue(state, 0);
+                states.SetValue(state, index);
             }
 
             var childSight = FindSightComponent(animation, childCache);
-            if (childSight == null || skeetSight == null)
+            if (childSight == null)
             {
-                return;
+                return true;
+            }
+
+            if (!thermalSelected && !IsSelectedAim(animation, childAim))
+            {
+                return true;
+            }
+
+            // A 0 -> 0 wrap still starts EFT's complete sight/camera refresh.
+            // Skip that no-op only for a fixed 1x child. LPVO, HHS, and G33
+            // advertise an available zoom above 1x and keep the transaction.
+            if (!childSight.HasCurrentZoomGreaterThenOne())
+            {
+                MakeMagnifierGreatAgainPlugin.LogInfo(
+                    "Consumed Change Zoom for fixed 1x Skeet-IR child '"
+                    + childCache.transform.name + "'.");
+                return false;
             }
 
             var childScopeIndex = childSight.SelectedScopeIndex;
             if (childScopeIndex < 0
                 || childScopeIndex >= childSight.ScopesSelectedModes.Length)
             {
-                return;
+                return true;
             }
 
             var childModesCount = childSight.GetScopeModesCount(childScopeIndex);
             var childMode = childSight.ScopesSelectedModes[childScopeIndex];
+            if (childModesCount <= 1)
+            {
+                return true;
+            }
+
             var nextChildMode = childModesCount > 0
                 ? (childMode + 1) % childModesCount
                 : childMode;
+            if (nextChildMode >= 0
+                && nextChildMode < childCache.ModesCount
+                && childCache.GetScopeModeInfo(nextChildMode).OpticSight == null)
+            {
+                NestedSightAimPatch.RestoreAimBone(childAim.Bone);
+            }
 
-            var skeetItemId = skeetSight.Item.Id.ToString();
             var childItemId = childSight.Item.Id.ToString();
             var childStateFound = false;
 
@@ -1583,15 +2274,6 @@ namespace MakeMagnifierGreatAgain
                 }
 
                 var stateId = _stateIdField.GetValue(state) as string;
-                if (string.Equals(stateId, skeetItemId, StringComparison.Ordinal))
-                {
-                    // Skeet's database mode is permanently zero. Its physical
-                    // inline/folded state is controlled only by Switch Sight.
-                    _stateModeField.SetValue(state, 0);
-                    states.SetValue(state, index);
-                    continue;
-                }
-
                 var stateScopeIndex = (int)_stateScopeIndexField.GetValue(state);
                 if (string.Equals(stateId, childItemId, StringComparison.Ordinal)
                     && stateScopeIndex == childScopeIndex)
@@ -1605,9 +2287,11 @@ namespace MakeMagnifierGreatAgain
             if (childStateFound)
             {
                 MakeMagnifierGreatAgainPlugin.LogInfo(
-                    "Forwarded Change Zoom from active Skeet-IR thermal view to child sight "
+                    "Forwarded Change Zoom to selected Skeet-IR child sight "
                     + $"'{childCache.transform.name}' (mode {childMode} -> {nextChildMode}).");
             }
+
+            return true;
         }
 
         private static SightComponent FindSightComponent(
@@ -1628,6 +2312,43 @@ namespace MakeMagnifierGreatAgain
             }
 
             return null;
+        }
+
+        private static ProceduralWeaponAnimation.SightNBone FindAim(
+            ProceduralWeaponAnimation animation,
+            ScopePrefabCache cache)
+        {
+            if (cache == null || animation.ScopeAimTransforms == null)
+            {
+                return null;
+            }
+
+            foreach (var aim in animation.ScopeAimTransforms)
+            {
+                if (ReferenceEquals(aim.ScopePrefabCache, cache))
+                {
+                    return aim;
+                }
+            }
+
+            return null;
+        }
+
+        internal static bool IsSelectedAim(
+            ProceduralWeaponAnimation animation,
+            ProceduralWeaponAnimation.SightNBone aim)
+        {
+            if (animation == null
+                || aim == null
+                || animation.ScopeAimTransforms == null
+                || animation.ScopeAimTransforms.Count == 0)
+            {
+                return false;
+            }
+
+            var selectedIndex = animation.AimIndex % animation.ScopeAimTransforms.Count;
+            return selectedIndex >= 0
+                && ReferenceEquals(animation.ScopeAimTransforms[selectedIndex], aim);
         }
     }
 
