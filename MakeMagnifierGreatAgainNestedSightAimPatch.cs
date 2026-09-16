@@ -492,6 +492,7 @@ namespace MakeMagnifierGreatAgain
             internal ProceduralWeaponAnimation.SightNBone OriginalChildAim;
             internal ProceduralWeaponAnimation.SightNBone G33OneXChildAim;
             internal Renderer ProjectedCollimatorRenderer;
+            internal Mesh ProjectedCollimatorMesh;
             internal Material ProjectedCollimatorMaterial;
             internal readonly Dictionary<OpticSight, ScopeThermalVisionData>
                 OriginalChildThermals =
@@ -517,8 +518,6 @@ namespace MakeMagnifierGreatAgain
             internal ScopePrefabCache SkeetCache;
             internal ProceduralWeaponAnimation.SightNBone ChildAim;
             internal ScopePrefabCache ChildCache;
-            internal Renderer ProjectedCollimatorRenderer;
-            internal Material ProjectedCollimatorMaterial;
             internal bool PoseCorrectionWasLogged;
         }
 
@@ -582,12 +581,6 @@ namespace MakeMagnifierGreatAgain
                     CopyAimPoint(
                         previousFixedOneX.OriginalSkeetAim,
                         previousFixedOneX.SkeetAim);
-                }
-
-                if (previousFixedOneX.ProjectedCollimatorMaterial != null)
-                {
-                    UnityEngine.Object.Destroy(
-                        previousFixedOneX.ProjectedCollimatorMaterial);
                 }
 
                 FixedOneXStates.Remove(animationId);
@@ -681,11 +674,6 @@ namespace MakeMagnifierGreatAgain
                     ChildCache = childCache
                 };
                 CopyAimPoint(skeetAim, fixedOneX.OriginalSkeetAim);
-                CreateProjectedCollimatorMaterial(
-                    childCache,
-                    false,
-                    out fixedOneX.ProjectedCollimatorRenderer,
-                    out fixedOneX.ProjectedCollimatorMaterial);
                 FixedOneXStates[animationId] = fixedOneX;
                 RestoreFixedOneXAim(fixedOneX);
 
@@ -733,7 +721,10 @@ namespace MakeMagnifierGreatAgain
             };
 
             CaptureChildThermals(state);
-            CaptureProjectedCollimator(state);
+            if (state.G33OneXChildAim != null)
+            {
+                CaptureProjectedCollimator(state);
+            }
             CaptureSkeetOptics(state);
             CopyAimPoint(childAim, state.OriginalChildAim);
             state.OriginalSkeetAim =
@@ -925,6 +916,7 @@ namespace MakeMagnifierGreatAgain
                 state.ChildCache,
                 state.G33OneXChildAim != null,
                 out state.ProjectedCollimatorRenderer,
+                out state.ProjectedCollimatorMesh,
                 out state.ProjectedCollimatorMaterial);
         }
 
@@ -932,9 +924,11 @@ namespace MakeMagnifierGreatAgain
             ScopePrefabCache childCache,
             bool preferNestedChild,
             out Renderer renderer,
+            out Mesh projectedMesh,
             out Material projectedMaterial)
         {
             renderer = null;
+            projectedMesh = null;
             projectedMaterial = null;
 
             var reticleCache = preferNestedChild
@@ -960,7 +954,18 @@ namespace MakeMagnifierGreatAgain
                 sourceMaterial = renderer.sharedMaterial;
             }
 
-            if (renderer == null || sourceMaterial == null)
+            var skinnedRenderer = renderer as SkinnedMeshRenderer;
+            if (skinnedRenderer != null)
+            {
+                projectedMesh = skinnedRenderer.sharedMesh;
+            }
+            else if (renderer != null)
+            {
+                var meshFilter = renderer.GetComponent<MeshFilter>();
+                projectedMesh = meshFilter != null ? meshFilter.sharedMesh : null;
+            }
+
+            if (renderer == null || projectedMesh == null || sourceMaterial == null)
             {
                 return;
             }
@@ -981,6 +986,34 @@ namespace MakeMagnifierGreatAgain
 
             projectedMaterial = new Material(shader);
             projectedMaterial.CopyPropertiesFromMaterial(sourceMaterial);
+            if (projectedMaterial.HasProperty("_Color"))
+            {
+                // CollimatorSight can retain an inactive black material while
+                // the renderer holds the live reticle color. Prefer the live
+                // renderer value and fall back to the EXPS3 red when neither
+                // serialized value contains a usable color.
+                var markColor = sourceMaterial.HasProperty("_Color")
+                    ? sourceMaterial.GetColor("_Color")
+                    : Color.clear;
+                var rendererMaterial = renderer.sharedMaterial;
+                var visibleColor = Mathf.Max(
+                    markColor.r,
+                    Mathf.Max(markColor.g, markColor.b));
+                if (visibleColor <= 0.01f
+                    && rendererMaterial != null
+                    && rendererMaterial.HasProperty("_Color"))
+                {
+                    markColor = rendererMaterial.GetColor("_Color");
+                    visibleColor = Mathf.Max(
+                        markColor.r,
+                        Mathf.Max(markColor.g, markColor.b));
+                }
+                if (visibleColor <= 0.01f)
+                {
+                    markColor = new Color(1f, 0.08f, 0.07f, 1f);
+                }
+                projectedMaterial.SetColor("_Color", markColor);
+            }
             projectedMaterial.name = sourceMaterial.name + "_MMGA_ThermalProjection";
             projectedMaterial.hideFlags = HideFlags.HideAndDontSave;
             projectedMaterial.renderQueue = sourceMaterial.renderQueue;
@@ -1029,6 +1062,7 @@ namespace MakeMagnifierGreatAgain
             }
 
             state.ProjectedCollimatorRenderer = null;
+            state.ProjectedCollimatorMesh = null;
             state.ProjectedCollimatorMaterial = null;
         }
 
@@ -1694,12 +1728,11 @@ namespace MakeMagnifierGreatAgain
 
             if (collimator != null)
             {
-                // CW FX/Collimator projects the mark from the rendering
-                // camera, _MarkShift, _MarkScale, and the real glass mesh.
-                // A lens-space texture copy cannot preserve that result. The
-                // camera runtime redraws this collimator with the mark-only
-                // projection shader after thermal processing instead.
-                targetMaterial.SetTexture("_MarkTex", Texture2D.blackTexture);
+                // Every 1x path displays its final thermal image on Skeet's
+                // opaque bridge lens, which covers the donor glass. Composite
+                // the donor mark on that same surface so it survives thermal
+                // processing. Custom G33 3x uses the live donor projection in
+                // the optic-camera path and does not enter this branch.
                 var collimatorShader = sourceMaterial.shader != null
                     ? sourceMaterial.shader.name
                     : "<missing>";
@@ -1707,12 +1740,11 @@ namespace MakeMagnifierGreatAgain
                     skeetCache,
                     childCache,
                     reticleCache,
-                    "projected collimator=" + collimatorShader);
-                return;
+                    "lens-composited collimator=" + collimatorShader);
             }
 
-            // Some non-collimator sights expose only a baked lens mark and no
-            // ScopeReticle mesh. Keep that fallback for those assets.
+            // Collimators and non-collimator sights with only a baked lens
+            // mark share the same visible 1x compositor.
             targetMaterial.SetTexture("_MarkTex", markTexture);
             if (targetMaterial.HasProperty("_Color")
                 && sourceMaterial.HasProperty("_Color"))
@@ -1803,6 +1835,7 @@ namespace MakeMagnifierGreatAgain
     {
         private bool _captured;
         private Vector3 _localPosition;
+        private Quaternion _localRotation;
 
         internal void Capture()
         {
@@ -1812,6 +1845,7 @@ namespace MakeMagnifierGreatAgain
             }
 
             _localPosition = transform.localPosition;
+            _localRotation = transform.localRotation;
             _captured = true;
         }
 
@@ -1823,8 +1857,11 @@ namespace MakeMagnifierGreatAgain
             }
 
             var changed = (transform.localPosition - _localPosition).sqrMagnitude
-                > 0.0000000001f;
+                > 0.0000000001f
+                || Quaternion.Angle(transform.localRotation, _localRotation)
+                > 0.0001f;
             transform.localPosition = _localPosition;
+            transform.localRotation = _localRotation;
             return changed;
         }
     }
@@ -1845,6 +1882,22 @@ namespace MakeMagnifierGreatAgain
         [HarmonyPrefix]
         private static bool Prefix(ProceduralWeaponAnimation __instance)
         {
+            SkeetIrSightSelectionPatch.FixedOneXState fixedOneX;
+            if (SkeetIrSightSelectionPatch.TryGetFixedOneXState(
+                    __instance,
+                    out fixedOneX)
+                && SkeetIrChildZoomForwardPatch.IsSelectedAim(
+                    __instance,
+                    fixedOneX.SkeetAim))
+            {
+                // Skeet owns the thermal optic, but its selector borrows the
+                // fixed sight's mod_aim_camera. Never let EFT align that bone
+                // to Skeet's optic_camera, even if CurrentScope was rebuilt as
+                // a different SightNBone instance during a weapon refresh.
+                SkeetIrSightSelectionPatch.RestoreFixedOneXAim(fixedOneX);
+                return false;
+            }
+
             var aim = __instance != null ? __instance.CurrentScope : null;
             var guard = aim != null && aim.Bone != null
                 ? aim.Bone.GetComponent<SkeetIrAimBonePoseGuard>()
@@ -1928,20 +1981,13 @@ namespace MakeMagnifierGreatAgain
     /// </summary>
     internal sealed class SkeetIrFixedOneXAimRuntime : MonoBehaviour
     {
-        private static bool _projectedReticleWasLogged;
         private ProceduralWeaponAnimation _animation;
         private SkeetIrSightSelectionPatch.FixedOneXState _state;
-        private CommandBuffer _reticleBuffer;
-        private Camera _reticleCamera;
-        private bool _collimatorWasEnabled;
-        private bool _collimatorHidden;
 
         internal void Initialize(
             ProceduralWeaponAnimation animation,
             SkeetIrSightSelectionPatch.FixedOneXState state)
         {
-            ReleaseReticleBuffer();
-            RestoreCollimator();
             _animation = animation;
             _state = state;
             Restore();
@@ -1950,23 +1996,16 @@ namespace MakeMagnifierGreatAgain
         private void OnEnable()
         {
             Camera.onPreCull += OnCameraPreCull;
-            Camera.onPostRender += OnCameraPostRender;
         }
 
         private void OnDisable()
         {
             Camera.onPreCull -= OnCameraPreCull;
-            Camera.onPostRender -= OnCameraPostRender;
-            DetachReticleBuffer();
-            RestoreCollimator();
         }
 
         private void OnDestroy()
         {
             Camera.onPreCull -= OnCameraPreCull;
-            Camera.onPostRender -= OnCameraPostRender;
-            ReleaseReticleBuffer();
-            RestoreCollimator();
         }
 
         private void Update()
@@ -1979,6 +2018,25 @@ namespace MakeMagnifierGreatAgain
             Restore();
         }
 
+        private void OnCameraPreCull(Camera camera)
+        {
+            var cameraManager = CameraManager.Instance;
+            if (camera != null
+                && cameraManager != null
+                && ReferenceEquals(cameraManager.Camera, camera)
+                && _animation != null
+                && _animation.IsAiming
+                && _animation.FirstPersonPointOfView
+                && SkeetIrChildZoomForwardPatch.IsSelectedAim(
+                    _animation,
+                    _state.SkeetAim))
+            {
+                // Weapon switching can update the shared optic state after
+                // LateUpdate. Restore once more at the last main-camera hook.
+                Restore();
+            }
+        }
+
         private void Restore()
         {
             SkeetIrSightSelectionPatch.FixedOneXState activeState;
@@ -1989,122 +2047,6 @@ namespace MakeMagnifierGreatAgain
                 && ReferenceEquals(activeState, _state))
             {
                 SkeetIrSightSelectionPatch.RestoreFixedOneXAim(_state);
-            }
-        }
-
-        private void OnCameraPreCull(Camera camera)
-        {
-            SkeetIrSightSelectionPatch.FixedOneXState activeState;
-            var cameraManager = CameraManager.Instance;
-            var shouldDraw = camera != null
-                && cameraManager != null
-                && ReferenceEquals(cameraManager.Camera, camera)
-                && _animation != null
-                && _animation.IsAiming
-                && _animation.FirstPersonPointOfView
-                && SkeetIrSightSelectionPatch.TryGetFixedOneXState(
-                    _animation,
-                    out activeState)
-                && ReferenceEquals(activeState, _state)
-                && SkeetIrChildZoomForwardPatch.IsSelectedAim(
-                    _animation,
-                    _state.SkeetAim)
-                && _state.ProjectedCollimatorRenderer != null
-                && _state.ProjectedCollimatorMaterial != null;
-            if (!shouldDraw)
-            {
-                return;
-            }
-
-            HideCollimator();
-            if (_reticleBuffer == null)
-            {
-                _reticleBuffer = new CommandBuffer
-                {
-                    name = "MMGA projected fixed-1x thermal reticle"
-                };
-                _reticleBuffer.DrawRenderer(
-                    _state.ProjectedCollimatorRenderer,
-                    _state.ProjectedCollimatorMaterial);
-            }
-
-            if (!ReferenceEquals(_reticleCamera, camera))
-            {
-                DetachReticleBuffer();
-                camera.AddCommandBuffer(
-                    CameraEvent.AfterImageEffects,
-                    _reticleBuffer);
-                _reticleCamera = camera;
-            }
-
-            if (!_projectedReticleWasLogged)
-            {
-                _projectedReticleWasLogged = true;
-                MakeMagnifierGreatAgainPlugin.LogInfo(
-                    "Fixed 1x thermal now redraws the attached sight's real "
-                    + "collimator projection after the main-camera image effects.");
-            }
-        }
-
-        private void OnCameraPostRender(Camera camera)
-        {
-            if (camera != null && ReferenceEquals(_reticleCamera, camera))
-            {
-                DetachReticleBuffer();
-                RestoreCollimator();
-            }
-        }
-
-        private void HideCollimator()
-        {
-            var renderer = _state != null
-                ? _state.ProjectedCollimatorRenderer
-                : null;
-            if (_collimatorHidden || renderer == null)
-            {
-                return;
-            }
-
-            _collimatorWasEnabled = renderer.enabled;
-            renderer.enabled = false;
-            _collimatorHidden = true;
-        }
-
-        private void RestoreCollimator()
-        {
-            if (!_collimatorHidden)
-            {
-                return;
-            }
-
-            var renderer = _state != null
-                ? _state.ProjectedCollimatorRenderer
-                : null;
-            if (renderer != null)
-            {
-                renderer.enabled = _collimatorWasEnabled;
-            }
-            _collimatorHidden = false;
-        }
-
-        private void DetachReticleBuffer()
-        {
-            if (_reticleCamera != null && _reticleBuffer != null)
-            {
-                _reticleCamera.RemoveCommandBuffer(
-                    CameraEvent.AfterImageEffects,
-                    _reticleBuffer);
-            }
-            _reticleCamera = null;
-        }
-
-        private void ReleaseReticleBuffer()
-        {
-            DetachReticleBuffer();
-            if (_reticleBuffer != null)
-            {
-                _reticleBuffer.Release();
-                _reticleBuffer = null;
             }
         }
     }
@@ -2125,17 +2067,33 @@ namespace MakeMagnifierGreatAgain
         private bool _renderersHidden;
         private bool _collimatorWasEnabled;
         private bool _collimatorHidden;
-        private CommandBuffer _g33ReticleBuffer;
-        private Camera _g33ReticleCamera;
+        private SkeetIrG33ReticlePostProcess _reticlePostProcess;
 
         internal void Initialize(
             ProceduralWeaponAnimation animation,
             SkeetIrSightSelectionPatch.FrontClipOnState state)
         {
-            ReleaseG33ReticleBuffer();
+            DisableReticleOverlay();
+            RestoreCollimator();
             RestoreRenderers();
             _animation = animation;
             _state = state;
+
+            var cameraClass = CameraManager.Instance;
+            var opticCamera = cameraClass != null
+                ? cameraClass.OpticCameraManager.Camera
+                : null;
+            if (state.G33OneXChildAim != null && opticCamera != null)
+            {
+                _reticlePostProcess =
+                    opticCamera.GetComponent<SkeetIrG33ReticlePostProcess>();
+                if (_reticlePostProcess == null)
+                {
+                    _reticlePostProcess = opticCamera.gameObject
+                        .AddComponent<SkeetIrG33ReticlePostProcess>();
+                }
+                _reticlePostProcess.Disable(state);
+            }
 
             var renderers = new List<Renderer>();
             var allRenderers = state.SkeetCache.transform
@@ -2166,7 +2124,7 @@ namespace MakeMagnifierGreatAgain
         {
             Camera.onPreCull -= OnCameraPreCull;
             Camera.onPostRender -= OnCameraPostRender;
-            DetachG33ReticleBuffer();
+            DisableReticleOverlay();
             RestoreRenderers();
             RestoreCollimator();
         }
@@ -2175,7 +2133,7 @@ namespace MakeMagnifierGreatAgain
         {
             Camera.onPreCull -= OnCameraPreCull;
             Camera.onPostRender -= OnCameraPostRender;
-            ReleaseG33ReticleBuffer();
+            DisableReticleOverlay();
             RestoreRenderers();
             RestoreCollimator();
         }
@@ -2193,7 +2151,7 @@ namespace MakeMagnifierGreatAgain
                 || camera == null
                 || !_state.ThermalActive)
             {
-                DetachG33ReticleBuffer();
+                DisableReticleOverlay();
                 RestoreRenderers();
                 RestoreCollimator();
                 return;
@@ -2203,7 +2161,7 @@ namespace MakeMagnifierGreatAgain
                 _animation,
                 _state))
             {
-                DetachG33ReticleBuffer();
+                DisableReticleOverlay();
                 RestoreRenderers();
                 RestoreCollimator();
                 return;
@@ -2212,7 +2170,7 @@ namespace MakeMagnifierGreatAgain
             var cameraClass = CameraManager.Instance;
             if (cameraClass == null)
             {
-                DetachG33ReticleBuffer();
+                DisableReticleOverlay();
                 RestoreRenderers();
                 RestoreCollimator();
                 return;
@@ -2225,10 +2183,9 @@ namespace MakeMagnifierGreatAgain
                     return;
                 }
 
+                DisableReticleOverlay();
                 RestoreRenderers();
                 RestoreCollimator();
-                HideCollimator();
-                AttachG33ReticleBuffer(camera);
                 return;
             }
 
@@ -2244,7 +2201,9 @@ namespace MakeMagnifierGreatAgain
                 || !currentOptic.transform.IsChildOf(
                     _state.ChildCache.transform))
             {
-                DetachG33ReticleBuffer();
+                DisableReticleOverlay();
+                RestoreRenderers();
+                RestoreCollimator();
                 return;
             }
 
@@ -2263,74 +2222,71 @@ namespace MakeMagnifierGreatAgain
             }
 
             _renderersHidden = true;
-            HideCollimator();
-            AttachG33ReticleBuffer(camera);
+            if (_state.G33OneXChildAim != null)
+            {
+                HideCollimator();
+                EnableReticleOverlay(camera);
+            }
         }
 
         private void OnCameraPostRender(Camera camera)
         {
-            if (camera == null
-                || !ReferenceEquals(_g33ReticleCamera, camera))
+            if (camera == null)
             {
                 return;
             }
 
-            DetachG33ReticleBuffer();
-            RestoreRenderers();
-            RestoreCollimator();
+            var cameraClass = CameraManager.Instance;
+            if (cameraClass != null
+                && ReferenceEquals(cameraClass.OpticCameraManager.Camera, camera))
+            {
+                RestoreRenderers();
+                RestoreCollimator();
+            }
         }
 
-        private void AttachG33ReticleBuffer(Camera camera)
+        private void EnableReticleOverlay(Camera camera)
         {
             if (_state == null
+                || camera == null
                 || _state.ProjectedCollimatorRenderer == null
+                || _state.ProjectedCollimatorMesh == null
                 || _state.ProjectedCollimatorMaterial == null)
             {
-                DetachG33ReticleBuffer();
+                DisableReticleOverlay();
                 return;
             }
 
-            if (_g33ReticleBuffer == null)
+            _reticlePostProcess =
+                camera.GetComponent<SkeetIrG33ReticlePostProcess>();
+            if (_reticlePostProcess == null)
             {
-                _g33ReticleBuffer = new CommandBuffer
-                {
-                    name = "MMGA projected G33 thermal reticle"
-                };
-                _g33ReticleBuffer.DrawRenderer(
-                    _state.ProjectedCollimatorRenderer,
-                    _state.ProjectedCollimatorMaterial);
+                _reticlePostProcess =
+                    camera.gameObject.AddComponent<SkeetIrG33ReticlePostProcess>();
             }
 
-            if (!ReferenceEquals(_g33ReticleCamera, camera))
-            {
-                DetachG33ReticleBuffer();
-                camera.AddCommandBuffer(
-                    CameraEvent.AfterImageEffects,
-                    _g33ReticleBuffer);
-                _g33ReticleCamera = camera;
-            }
+            _reticlePostProcess.Configure(
+                _state,
+                _state.ProjectedCollimatorRenderer,
+                _state.ProjectedCollimatorMesh,
+                _state.ProjectedCollimatorMaterial);
 
             if (!_g33ProjectedReticleWasLogged)
             {
                 _g33ProjectedReticleWasLogged = true;
                 MakeMagnifierGreatAgainPlugin.LogInfo(
-                    "Thermal sight path now redraws the attached sight's "
-                    + "real collimator projection after thermal processing; "
-                    + "eye distance, _MarkShift, _MarkScale, and glass geometry "
-                    + "therefore match the normal 3x reticle.");
+                    "Custom G33 thermal 3x now redraws the donor collimator "
+                    + "after the optic-camera thermal effect; its native mesh, "
+                    + "projection scale, position, and red color are preserved.");
             }
         }
 
-        private void DetachG33ReticleBuffer()
+        private void DisableReticleOverlay()
         {
-            if (_g33ReticleCamera != null && _g33ReticleBuffer != null)
+            if (_reticlePostProcess != null)
             {
-                _g33ReticleCamera.RemoveCommandBuffer(
-                    CameraEvent.AfterImageEffects,
-                    _g33ReticleBuffer);
+                _reticlePostProcess.Disable(_state);
             }
-
-            _g33ReticleCamera = null;
         }
 
         private void HideCollimator()
@@ -2362,18 +2318,7 @@ namespace MakeMagnifierGreatAgain
             {
                 renderer.enabled = _collimatorWasEnabled;
             }
-
             _collimatorHidden = false;
-        }
-
-        private void ReleaseG33ReticleBuffer()
-        {
-            DetachG33ReticleBuffer();
-            if (_g33ReticleBuffer != null)
-            {
-                _g33ReticleBuffer.Release();
-                _g33ReticleBuffer = null;
-            }
         }
 
         private void RestoreRenderers()
@@ -2393,6 +2338,94 @@ namespace MakeMagnifierGreatAgain
             }
 
             _renderersHidden = false;
+        }
+    }
+
+    /// <summary>
+    /// Final optic-camera image effect used only by the custom G33 3x thermal
+    /// route. The donor collimator is omitted from the thermal scene pass, then
+    /// redrawn over the processed image with its original transform and shader
+    /// projection parameters. This keeps its native size and prevents thermal
+    /// vision from converting the red mark to black.
+    /// </summary>
+    [DefaultExecutionOrder(10000)]
+    internal sealed class SkeetIrG33ReticlePostProcess : MonoBehaviour
+    {
+        private object _owner;
+        private Camera _camera;
+        private Renderer _renderer;
+        private Mesh _mesh;
+        private Material _material;
+        private CommandBuffer _drawBuffer;
+
+        internal void Configure(
+            object owner,
+            Renderer renderer,
+            Mesh mesh,
+            Material material)
+        {
+            _owner = owner;
+            _camera = GetComponent<Camera>();
+            _renderer = renderer;
+            _mesh = mesh;
+            _material = material;
+        }
+
+        internal void Disable(object owner)
+        {
+            if (ReferenceEquals(_owner, owner))
+            {
+                _owner = null;
+                _renderer = null;
+                _mesh = null;
+                _material = null;
+            }
+        }
+
+        private void OnDestroy()
+        {
+            if (_drawBuffer != null)
+            {
+                _drawBuffer.Release();
+                _drawBuffer = null;
+            }
+        }
+
+        private void OnRenderImage(RenderTexture source, RenderTexture destination)
+        {
+            Graphics.Blit(source, destination);
+            if (_owner == null
+                || _camera == null
+                || _renderer == null
+                || _mesh == null
+                || _material == null)
+            {
+                return;
+            }
+
+            if (_drawBuffer == null)
+            {
+                _drawBuffer = new CommandBuffer
+                {
+                    name = "MMGA custom G33 post-thermal reticle"
+                };
+            }
+
+            _drawBuffer.Clear();
+            var target = destination != null
+                ? new RenderTargetIdentifier(destination)
+                : new RenderTargetIdentifier(BuiltinRenderTextureType.CameraTarget);
+            _drawBuffer.SetRenderTarget(target);
+            _drawBuffer.SetViewProjectionMatrices(
+                _camera.worldToCameraMatrix,
+                GL.GetGPUProjectionMatrix(
+                    _camera.projectionMatrix,
+                    destination != null || _camera.targetTexture != null));
+            _drawBuffer.DrawMesh(
+                _mesh,
+                _renderer.localToWorldMatrix,
+                _material);
+            Graphics.ExecuteCommandBuffer(_drawBuffer);
         }
     }
 
