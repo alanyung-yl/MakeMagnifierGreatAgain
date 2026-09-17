@@ -999,18 +999,9 @@ namespace MakeMagnifierGreatAgain
             projectedMesh = null;
             projectedMaterial = null;
 
-            var reticleCache = preferNestedChild
-                ? NestedSightAimPatch.FindImmediateChildScope(childCache.transform)
-                : childCache;
-            if ((reticleCache == null || !reticleCache.HasCollimators)
-                && childCache.HasCollimators)
-            {
-                reticleCache = childCache;
-            }
-
-            var collimator = reticleCache != null && reticleCache.HasCollimators
-                ? reticleCache.FirstCollimator
-                : null;
+            var collimator = FindProjectedCollimator(
+                childCache,
+                preferNestedChild);
             renderer = collimator != null
                 ? collimator.CollimatorMeshRenderer
                 : null;
@@ -1085,6 +1076,25 @@ namespace MakeMagnifierGreatAgain
             projectedMaterial.name = sourceMaterial.name + "_MMGA_ThermalProjection";
             projectedMaterial.hideFlags = HideFlags.HideAndDontSave;
             projectedMaterial.renderQueue = sourceMaterial.renderQueue;
+        }
+
+        internal static CollimatorSight FindProjectedCollimator(
+            ScopePrefabCache childCache,
+            bool preferNestedChild)
+        {
+            var reticleCache = preferNestedChild
+                ? NestedSightAimPatch.FindImmediateChildScope(childCache.transform)
+                : childCache;
+            if ((reticleCache == null || !reticleCache.HasCollimators)
+                && childCache.HasCollimators)
+            {
+                reticleCache = childCache;
+            }
+
+            var collimator = reticleCache != null && reticleCache.HasCollimators
+                ? reticleCache.FirstCollimator
+                : null;
+            return collimator;
         }
 
         private static Shader FindG33ReticleShader()
@@ -1832,8 +1842,9 @@ namespace MakeMagnifierGreatAgain
             ScopePrefabCache childCache)
         {
             var reticleCache = childCache;
-            if (reticleCache != null
-                && NestedSightAimPatch.IsG33RootName(reticleCache.transform.name))
+            var customG33 = reticleCache != null
+                && NestedSightAimPatch.IsG33RootName(reticleCache.transform.name);
+            if (customG33)
             {
                 reticleCache = NestedSightAimPatch.FindImmediateChildScope(
                     reticleCache.transform);
@@ -1851,6 +1862,22 @@ namespace MakeMagnifierGreatAgain
             }
 
             if (collimator == null)
+            {
+                return;
+            }
+
+            // A conventional hybrid such as HHS-1 owns its 1x collimator
+            // through the active ScopeModeInfo.ModeGameObject. Do not force
+            // that component or renderer on from a second lifecycle: EFT's
+            // native OnEnable/OnDisable events also register and unregister
+            // the collimator with its mask/SSAA pipeline. The custom G33 is
+            // different because its donor is a collapsed nested sight rather
+            // than the outer mode object.
+            if (!customG33
+                && childCache != null
+                && childCache.ModesCount > 1
+                && modeInfo != null
+                && ReferenceEquals(modeInfo.CollimatorSight, collimator))
             {
                 return;
             }
@@ -2079,12 +2106,12 @@ namespace MakeMagnifierGreatAgain
         private CommandBuffer _opticalMaskBuffer;
         private Renderer _oneXReticleRenderer;
         private Mesh _oneXReticleMesh;
+        private CollimatorSight _oneXReticleSourceCollimator;
         private Material _oneXReticleSourceMaterial;
         private Material _oneXReticleProjectionMaterial;
         private RenderTexture _oneXReticleProjectionTexture;
         private CommandBuffer _oneXReticleProjectionBuffer;
         private int _oneXReticleRootId;
-        private bool _oneXReticleRequiresVerticalFlip;
         private static readonly HashSet<int> LoggedReticleProjectionRoots =
             new HashSet<int>();
 
@@ -2122,8 +2149,17 @@ namespace MakeMagnifierGreatAgain
                 : null;
             if (oneXChild != null)
             {
+                // Front-clip-on setup turns the public Skeet selector entry
+                // into a stable proxy for the child sight. Its
+                // ScopePrefabCache therefore points at HHS/G33 here, not at
+                // the physical Skeet cache. Clearing the reticle through that
+                // proxy permanently blackened the HHS magnified _MarkTex and
+                // nulled its ScopeData.Reticle after the first 3x -> 1x
+                // transition. Always resolve the separately retained real
+                // Skeet cache before mutating the thermal lens.
+                var skeetCache = FindRegisteredSkeetCache();
                 SkeetIrSightSelectionPatch.DisableSkeetThermalReticle(
-                    _skeetAim.ScopePrefabCache);
+                    skeetCache);
                 SkeetIrSightSelectionPatch.KeepOneXChildCollimatorActive(
                     oneXChild);
             }
@@ -2229,19 +2265,29 @@ namespace MakeMagnifierGreatAgain
                 || _oneXReticleProjectionMaterial == null)
             {
                 ReleaseOneXReticleResources();
-                _oneXReticleRequiresVerticalFlip =
-                    NestedSightAimPatch.IsG33RootName(
-                        foregroundRoot.transform.name);
+                var preferNestedChild = NestedSightAimPatch.IsG33RootName(
+                    foregroundRoot.transform.name);
+                _oneXReticleSourceCollimator =
+                    SkeetIrSightSelectionPatch.FindProjectedCollimator(
+                        foregroundRoot,
+                        preferNestedChild);
                 SkeetIrSightSelectionPatch.CreateProjectedCollimatorMaterial(
                     foregroundRoot,
-                    _oneXReticleRequiresVerticalFlip,
+                    preferNestedChild,
                     out _oneXReticleRenderer,
                     out _oneXReticleMesh,
                     out _oneXReticleProjectionMaterial);
                 _oneXReticleRootId = rootId;
-                _oneXReticleSourceMaterial = _oneXReticleRenderer != null
-                    ? _oneXReticleRenderer.sharedMaterial
-                    : null;
+                _oneXReticleSourceMaterial =
+                    _oneXReticleSourceCollimator != null
+                        ? _oneXReticleSourceCollimator.CollimatorMaterial
+                        : null;
+                if (_oneXReticleSourceMaterial == null
+                    && _oneXReticleRenderer != null)
+                {
+                    _oneXReticleSourceMaterial =
+                        _oneXReticleRenderer.sharedMaterial;
+                }
             }
         }
 
@@ -2315,20 +2361,32 @@ namespace MakeMagnifierGreatAgain
                 MakeMagnifierGreatAgainPlugin.LogInfo(
                     "Skeet-IR 1x thermal now composites a screen-space texture "
                     + "rendered from the child's original collimator mesh and "
-                    + "projection; no main-camera redraw or lens cutout is used"
-                    + (_oneXReticleRequiresVerticalFlip
-                        ? ", with the nested G33 mark corrected vertically."
-                        : "."));
+                    + "projection; no main-camera redraw or lens cutout is used.");
             }
             return true;
         }
 
         private void SyncOneXReticleProjectionProperties()
         {
-            var liveMaterial = _oneXReticleRenderer.sharedMaterial;
+            // Match EFT's ScopeMaskRenderer: CollimatorMaterial is the
+            // authoritative projected-mark source. HHS mode transitions can
+            // replace or temporarily invalidate the renderer material while
+            // the CollimatorSight retains the correct mark properties.
+            var liveMaterial = _oneXReticleSourceCollimator != null
+                ? _oneXReticleSourceCollimator.CollimatorMaterial
+                : null;
+            if (liveMaterial == null)
+            {
+                liveMaterial = _oneXReticleRenderer.sharedMaterial;
+            }
             if (liveMaterial != null)
             {
                 _oneXReticleSourceMaterial = liveMaterial;
+            }
+
+            if (_oneXReticleSourceMaterial == null)
+            {
+                return;
             }
 
             CopyTextureProperty("_MarkTex");
@@ -2337,14 +2395,6 @@ namespace MakeMagnifierGreatAgain
             CopyVectorProperty("_MarkShift");
             CopyFloatProperty("_MarkScale");
             CopyFloatProperty("_HDR");
-
-            if (_oneXReticleProjectionMaterial.HasProperty(
-                    "_MMGA_FlipMarkY"))
-            {
-                _oneXReticleProjectionMaterial.SetFloat(
-                    "_MMGA_FlipMarkY",
-                    _oneXReticleRequiresVerticalFlip ? 1f : 0f);
-            }
 
             if (_oneXReticleSourceMaterial.HasProperty("_Color")
                 && _oneXReticleProjectionMaterial.HasProperty("_Color"))
@@ -2458,10 +2508,10 @@ namespace MakeMagnifierGreatAgain
 
             _oneXReticleRenderer = null;
             _oneXReticleMesh = null;
+            _oneXReticleSourceCollimator = null;
             _oneXReticleSourceMaterial = null;
             _oneXReticleProjectionMaterial = null;
             _oneXReticleRootId = 0;
-            _oneXReticleRequiresVerticalFlip = false;
         }
 
         private void SetVisible(bool visible)
