@@ -2012,14 +2012,27 @@ namespace MakeMagnifierGreatAgain
     internal sealed class SkeetIrLensVisibilityRuntime : MonoBehaviour
     {
         private const string VisibleProperty = "_MMGA_ThermalVisible";
+        private const string OpticalMaskProperty = "_MMGA_OpticalMask";
+        private const string OpticalMaskEnabledProperty =
+            "_MMGA_OpticalMaskEnabled";
+        private const string OpticalMaskShaderName =
+            "SkeetIR/OpticalWindowMask";
+        private static readonly HashSet<int> LoggedForegroundRoots =
+            new HashSet<int>();
+        private static bool _missingOpticalMaskShaderWasLogged;
         private ProceduralWeaponAnimation _animation;
         private ProceduralWeaponAnimation.SightNBone _skeetAim;
         private Material _lensMaterial;
+        private Material _opticalMaskMaterial;
+        private RenderTexture _opticalMaskTexture;
+        private CommandBuffer _opticalMaskBuffer;
 
         internal void Initialize(
             ProceduralWeaponAnimation animation,
             ProceduralWeaponAnimation.SightNBone skeetAim)
         {
+            DisableOpticalMask();
+            ReleaseOpticalMaskResources();
             _animation = animation;
             _skeetAim = skeetAim;
             var optic = skeetAim.ScopePrefabCache.FirstOptic;
@@ -2028,19 +2041,82 @@ namespace MakeMagnifierGreatAgain
             SetVisible(false);
         }
 
+        private void OnEnable()
+        {
+            Camera.onPreCull += OnCameraPreCull;
+        }
+
         private void LateUpdate()
         {
-            SetVisible(_animation != null
+            var visible = _animation != null
                 && _animation.IsAiming
                 && _animation.FirstPersonPointOfView
                 && SkeetIrChildZoomForwardPatch.IsSelectedAim(
                     _animation,
-                    _skeetAim));
+                    _skeetAim);
+            SetVisible(visible);
+            if (!visible)
+            {
+                DisableOpticalMask();
+            }
         }
 
         private void OnDisable()
         {
+            Camera.onPreCull -= OnCameraPreCull;
             SetVisible(false);
+            DisableOpticalMask();
+            ReleaseOpticalMaskResources();
+        }
+
+        private void OnDestroy()
+        {
+            Camera.onPreCull -= OnCameraPreCull;
+            SetVisible(false);
+            DisableOpticalMask();
+            ReleaseOpticalMaskResources();
+        }
+
+        private void OnCameraPreCull(Camera camera)
+        {
+            var cameraManager = CameraManager.Instance;
+            if (camera == null
+                || cameraManager == null
+                || !ReferenceEquals(cameraManager.Camera, camera))
+            {
+                return;
+            }
+
+            var foregroundRoot = IsThermalDisplayVisible()
+                ? FindActiveOneXForegroundRoot()
+                : null;
+            int occluderCount;
+            if (foregroundRoot == null
+                || !RenderForegroundOcclusionMask(
+                    camera,
+                    foregroundRoot,
+                    out occluderCount))
+            {
+                DisableOpticalMask();
+                return;
+            }
+
+            if (_lensMaterial != null)
+            {
+                _lensMaterial.SetTexture(
+                    OpticalMaskProperty,
+                    _opticalMaskTexture);
+                _lensMaterial.SetFloat(OpticalMaskEnabledProperty, 1f);
+            }
+
+            if (LoggedForegroundRoots.Add(foregroundRoot.GetInstanceID()))
+            {
+                MakeMagnifierGreatAgainPlugin.LogInfo(
+                    "Skeet-IR 1x thermal view now preserves "
+                    + occluderCount
+                    + " foreground housing/mount renderer pass(es) from '"
+                    + foregroundRoot.transform.name + "'.");
+            }
         }
 
         private void SetVisible(bool visible)
@@ -2049,6 +2125,386 @@ namespace MakeMagnifierGreatAgain
             {
                 _lensMaterial.SetFloat(VisibleProperty, visible ? 1f : 0f);
             }
+        }
+
+        private bool IsThermalDisplayVisible()
+        {
+            if (_animation == null
+                || _skeetAim == null
+                || !_animation.IsAiming
+                || !_animation.FirstPersonPointOfView
+                || !SkeetIrChildZoomForwardPatch.IsSelectedAim(
+                    _animation,
+                    _skeetAim))
+            {
+                return false;
+            }
+
+            var localPlayer = EFT.GamePlayerOwner.MyPlayer;
+            return localPlayer == null
+                || ReferenceEquals(
+                    localPlayer.ProceduralWeaponAnimation,
+                    _animation);
+        }
+
+        private ScopePrefabCache FindActiveOneXForegroundRoot()
+        {
+            ScopePrefabCache foregroundRoot = null;
+            SkeetIrSightSelectionPatch.FixedOneXState fixedOneX;
+            if (SkeetIrSightSelectionPatch.TryGetFixedOneXState(
+                    _animation,
+                    out fixedOneX)
+                && ReferenceEquals(fixedOneX.SkeetAim, _skeetAim))
+            {
+                foregroundRoot = fixedOneX.ChildCache;
+            }
+            else
+            {
+                SkeetIrSightSelectionPatch.FrontClipOnState frontClipOn;
+                if (!SkeetIrSightSelectionPatch.TryGetFrontClipOnState(
+                        _animation,
+                        out frontClipOn)
+                    || !ReferenceEquals(frontClipOn.SkeetAim, _skeetAim)
+                    || !frontClipOn.ThermalUsesSkeetOptic)
+                {
+                    return null;
+                }
+
+                // Keep the complete immediate-child hierarchy. For the custom
+                // G33 1x route this includes both the flipped magnifier/mount
+                // and its nested collimator, so every solid object between the
+                // player camera and Skeet's display can occlude that display.
+                foregroundRoot = frontClipOn.ChildCache;
+            }
+
+            return foregroundRoot;
+        }
+
+        private bool RenderForegroundOcclusionMask(
+            Camera camera,
+            ScopePrefabCache foregroundRoot,
+            out int occluderCount)
+        {
+            occluderCount = 0;
+            if (_lensMaterial == null
+                || !_lensMaterial.HasProperty(OpticalMaskProperty)
+                || !_lensMaterial.HasProperty(OpticalMaskEnabledProperty))
+            {
+                return false;
+            }
+
+            if (_opticalMaskMaterial == null)
+            {
+                var shader = FindOpticalMaskShader();
+                if (shader == null)
+                {
+                    if (!_missingOpticalMaskShaderWasLogged)
+                    {
+                        _missingOpticalMaskShaderWasLogged = true;
+                        MakeMagnifierGreatAgainPlugin.LogWarning(
+                            "SkeetIR/OpticalWindowMask was not found; foreground sight geometry cannot occlude the Skeet-IR 1x thermal display.");
+                    }
+                    return false;
+                }
+
+                _opticalMaskMaterial = new Material(shader)
+                {
+                    name = "MMGA Skeet-IR foreground occlusion mask",
+                    hideFlags = HideFlags.HideAndDontSave
+                };
+            }
+
+            EnsureOpticalMaskTexture(camera);
+            if (_opticalMaskTexture == null)
+            {
+                return false;
+            }
+
+            if (_opticalMaskBuffer == null)
+            {
+                _opticalMaskBuffer = new CommandBuffer
+                {
+                    name = "MMGA Skeet-IR foreground occlusion"
+                };
+            }
+
+            _opticalMaskBuffer.Clear();
+            _opticalMaskBuffer.SetRenderTarget(_opticalMaskTexture);
+            _opticalMaskBuffer.ClearRenderTarget(false, true, Color.black);
+            _opticalMaskBuffer.SetViewProjectionMatrices(
+                camera.worldToCameraMatrix,
+                GL.GetGPUProjectionMatrix(camera.projectionMatrix, true));
+
+            var opticalSurfaces = FindOpticalSurfaces(foregroundRoot);
+            var nonFirstPersonLodRenderers =
+                FindNonFirstPersonLodRenderers(foregroundRoot);
+            var foregroundRenderers = foregroundRoot.transform
+                .GetComponentsInChildren<Renderer>(true);
+            foreach (var renderer in foregroundRenderers)
+            {
+                if (renderer == null
+                    || !renderer.enabled
+                    || !renderer.gameObject.activeInHierarchy
+                    || nonFirstPersonLodRenderers.Contains(renderer)
+                    || opticalSurfaces.Contains(renderer)
+                    || IsNamedOpticalSurface(renderer.name))
+                {
+                    continue;
+                }
+
+                var materials = renderer.sharedMaterials;
+                if (materials == null || materials.Length == 0)
+                {
+                    _opticalMaskBuffer.DrawRenderer(
+                        renderer,
+                        _opticalMaskMaterial);
+                    occluderCount++;
+                    continue;
+                }
+
+                for (var materialIndex = 0;
+                    materialIndex < materials.Length;
+                    materialIndex++)
+                {
+                    if (IsOpticalSurfaceMaterial(materials[materialIndex]))
+                    {
+                        continue;
+                    }
+
+                    _opticalMaskBuffer.DrawRenderer(
+                        renderer,
+                        _opticalMaskMaterial,
+                        materialIndex);
+                    occluderCount++;
+                }
+            }
+
+            if (occluderCount == 0)
+            {
+                return false;
+            }
+
+            Graphics.ExecuteCommandBuffer(_opticalMaskBuffer);
+            return true;
+        }
+
+        private static HashSet<Renderer> FindNonFirstPersonLodRenderers(
+            ScopePrefabCache foregroundRoot)
+        {
+            var firstPersonRenderers = new HashSet<Renderer>();
+            var nonFirstPersonRenderers = new HashSet<Renderer>();
+            var lodGroups = foregroundRoot.transform
+                .GetComponentsInChildren<LODGroup>(true);
+
+            foreach (var lodGroup in lodGroups)
+            {
+                if (lodGroup == null)
+                {
+                    continue;
+                }
+
+                var lods = lodGroup.GetLODs();
+                for (var lodIndex = 0; lodIndex < lods.Length; lodIndex++)
+                {
+                    var renderers = lods[lodIndex].renderers;
+                    if (renderers == null)
+                    {
+                        continue;
+                    }
+
+                    foreach (var renderer in renderers)
+                    {
+                        if (renderer == null)
+                        {
+                            continue;
+                        }
+
+                        // EFT builds its first-person optic renderer list from
+                        // LOD0. CommandBuffer.DrawRenderer bypasses Unity's LOD
+                        // selection, so explicitly exclude every lower LOD.
+                        if (lodIndex == 0)
+                        {
+                            firstPersonRenderers.Add(renderer);
+                        }
+                        else
+                        {
+                            nonFirstPersonRenderers.Add(renderer);
+                        }
+                    }
+                }
+            }
+
+            nonFirstPersonRenderers.ExceptWith(firstPersonRenderers);
+            return nonFirstPersonRenderers;
+        }
+
+        private static HashSet<Renderer> FindOpticalSurfaces(
+            ScopePrefabCache foregroundRoot)
+        {
+            var surfaces = new HashSet<Renderer>();
+            var caches = foregroundRoot.transform
+                .GetComponentsInChildren<ScopePrefabCache>(true);
+            foreach (var cache in caches)
+            {
+                if (cache == null)
+                {
+                    continue;
+                }
+
+                for (var mode = 0; mode < cache.ModesCount; mode++)
+                {
+                    var modeInfo = cache.GetScopeModeInfo(mode);
+                    if (modeInfo == null)
+                    {
+                        continue;
+                    }
+
+                    var collimator = modeInfo.CollimatorSight;
+                    if (collimator != null
+                        && collimator.CollimatorMeshRenderer != null)
+                    {
+                        surfaces.Add(collimator.CollimatorMeshRenderer);
+                    }
+
+                    var optic = modeInfo.OpticSight;
+                    if (optic != null && optic.LensRenderer != null)
+                    {
+                        surfaces.Add(optic.LensRenderer);
+                    }
+                }
+            }
+
+            return surfaces;
+        }
+
+        private static bool IsNamedOpticalSurface(string rendererName)
+        {
+            if (string.IsNullOrEmpty(rendererName))
+            {
+                return false;
+            }
+
+            var normalized = rendererName.ToLowerInvariant();
+            return normalized.Contains("linza")
+                || normalized.Contains("lens")
+                || normalized.Contains("glass");
+        }
+
+        private static bool IsOpticalSurfaceMaterial(Material material)
+        {
+            if (material == null)
+            {
+                return false;
+            }
+
+            var shaderName = material.shader != null
+                ? material.shader.name
+                : string.Empty;
+            var normalized = (material.name + " " + shaderName)
+                .ToLowerInvariant();
+            return normalized.Contains("collimator")
+                || normalized.Contains("opticsight")
+                || normalized.Contains("backlens")
+                || normalized.Contains("glass")
+                || normalized.Contains("lens");
+        }
+
+        private void EnsureOpticalMaskTexture(Camera camera)
+        {
+            var width = Mathf.Max(1, camera.pixelWidth);
+            var height = Mathf.Max(1, camera.pixelHeight);
+            if (_opticalMaskTexture != null
+                && _opticalMaskTexture.width == width
+                && _opticalMaskTexture.height == height)
+            {
+                return;
+            }
+
+            ReleaseOpticalMaskTexture();
+            var format = SystemInfo.SupportsRenderTextureFormat(
+                RenderTextureFormat.R8)
+                ? RenderTextureFormat.R8
+                : RenderTextureFormat.ARGB32;
+            _opticalMaskTexture = new RenderTexture(
+                width,
+                height,
+                0,
+                format,
+                RenderTextureReadWrite.Linear)
+            {
+                name = "MMGA Skeet-IR foreground occlusion",
+                filterMode = FilterMode.Point,
+                wrapMode = TextureWrapMode.Clamp,
+                hideFlags = HideFlags.HideAndDontSave
+            };
+            _opticalMaskTexture.Create();
+        }
+
+        private static Shader FindOpticalMaskShader()
+        {
+            var shader = Shader.Find(OpticalMaskShaderName);
+            if (shader != null)
+            {
+                return shader;
+            }
+
+            foreach (var bundle in AssetBundle.GetAllLoadedAssetBundles())
+            {
+                var assetNames = bundle.GetAllAssetNames();
+                for (var index = 0; index < assetNames.Length; index++)
+                {
+                    var assetName = assetNames[index];
+                    if (assetName.EndsWith(
+                        "skeetiropticalwindowmask.shader",
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        shader = bundle.LoadAsset<Shader>(assetName);
+                        if (shader != null)
+                        {
+                            return shader;
+                        }
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private void DisableOpticalMask()
+        {
+            if (_lensMaterial != null
+                && _lensMaterial.HasProperty(OpticalMaskEnabledProperty))
+            {
+                _lensMaterial.SetFloat(OpticalMaskEnabledProperty, 0f);
+            }
+        }
+
+        private void ReleaseOpticalMaskResources()
+        {
+            if (_opticalMaskBuffer != null)
+            {
+                _opticalMaskBuffer.Release();
+                _opticalMaskBuffer = null;
+            }
+
+            ReleaseOpticalMaskTexture();
+            if (_opticalMaskMaterial != null)
+            {
+                UnityEngine.Object.Destroy(_opticalMaskMaterial);
+                _opticalMaskMaterial = null;
+            }
+        }
+
+        private void ReleaseOpticalMaskTexture()
+        {
+            if (_opticalMaskTexture == null)
+            {
+                return;
+            }
+
+            _opticalMaskTexture.Release();
+            UnityEngine.Object.Destroy(_opticalMaskTexture);
+            _opticalMaskTexture = null;
         }
     }
 
