@@ -494,6 +494,7 @@ namespace MakeMagnifierGreatAgain
             internal Renderer ProjectedCollimatorRenderer;
             internal Mesh ProjectedCollimatorMesh;
             internal Material ProjectedCollimatorMaterial;
+            internal Texture2D ProjectedCollimatorMarkTexture;
             internal readonly Dictionary<OpticSight, ScopeThermalVisionData>
                 OriginalChildThermals =
                     new Dictionary<OpticSight, ScopeThermalVisionData>();
@@ -543,6 +544,8 @@ namespace MakeMagnifierGreatAgain
         private static bool _hybridOneXRouteWasLogged;
         private static bool _g33OneXAimRouteWasLogged;
         private static bool _missingG33ReticleShaderWasLogged;
+        private const string CorrectMarkOrientationProperty =
+            "_MMGA_CorrectMarkOrientation";
         private static bool _missingUpdaterFieldWasLogged;
         private static bool _missingLiveThermalMethodWasLogged;
 
@@ -986,6 +989,176 @@ namespace MakeMagnifierGreatAgain
                 out state.ProjectedCollimatorRenderer,
                 out state.ProjectedCollimatorMesh,
                 out state.ProjectedCollimatorMaterial);
+
+            if (state.ProjectedCollimatorMaterial == null)
+            {
+                return;
+            }
+
+            // Preserve the complete native collimator projection for custom
+            // G33 3x: the original glass mesh, transform, _MarkShift,
+            // _MarkScale, and EFT 1-Y sample mapping remain unchanged. Only
+            // the private post-thermal copy of the mark texture is mirrored
+            // around authored UV center 0.5, which is the collimator's optical
+            // anchor. This keeps the point of aim fixed even for asymmetric
+            // range/drop marks. The donor material used by thermal-off and
+            // every 1x route is never modified.
+            var sourceMark = state.ProjectedCollimatorMaterial.HasProperty(
+                "_MarkTex")
+                ? state.ProjectedCollimatorMaterial.GetTexture("_MarkTex")
+                : null;
+            state.ProjectedCollimatorMarkTexture =
+                CreateCenteredVerticalMarkFlip(sourceMark);
+            if (state.ProjectedCollimatorMarkTexture != null)
+            {
+                state.ProjectedCollimatorMaterial.SetTexture(
+                    "_MarkTex",
+                    state.ProjectedCollimatorMarkTexture);
+            }
+
+            // The texture copy owns the orientation correction. Keep the
+            // shared shader on its native projection branch; changing the UV
+            // equation here was the experiment that moved some donor marks.
+            if (state.ProjectedCollimatorMaterial.HasProperty(
+                CorrectMarkOrientationProperty))
+            {
+                state.ProjectedCollimatorMaterial.SetFloat(
+                    CorrectMarkOrientationProperty,
+                    0f);
+            }
+        }
+
+        private static Texture2D CreateCenteredVerticalMarkFlip(
+            Texture markTexture)
+        {
+            if (markTexture == null)
+            {
+                return null;
+            }
+
+            var width = Mathf.Max(1, markTexture.width);
+            var height = Mathf.Max(1, markTexture.height);
+            var temporary = RenderTexture.GetTemporary(
+                width,
+                height,
+                0,
+                RenderTextureFormat.ARGB32,
+                RenderTextureReadWrite.Linear);
+            var previous = RenderTexture.active;
+            Texture2D readable = null;
+            Texture2D flipped = null;
+            try
+            {
+                Graphics.Blit(markTexture, temporary);
+                RenderTexture.active = temporary;
+                readable = new Texture2D(
+                    width,
+                    height,
+                    TextureFormat.RGBA32,
+                    false,
+                    true);
+                readable.ReadPixels(
+                    new Rect(0f, 0f, width, height),
+                    0,
+                    0,
+                    false);
+                readable.Apply(false, false);
+
+                var sourcePixels = readable.GetPixels32();
+                var minimumY = height;
+                var maximumY = -1;
+                for (var y = 0; y < height; y++)
+                {
+                    var row = y * width;
+                    for (var x = 0; x < width; x++)
+                    {
+                        if (sourcePixels[row + x].a == 0)
+                        {
+                            continue;
+                        }
+
+                        minimumY = Mathf.Min(minimumY, y);
+                        maximumY = Mathf.Max(maximumY, y);
+                    }
+                }
+
+                if (maximumY < minimumY)
+                {
+                    MakeMagnifierGreatAgainPlugin.LogWarning(
+                        "Could not flip custom G33 thermal mark texture '"
+                        + markTexture.name
+                        + "' because its readable copy contained no alpha; "
+                        + "retaining the native orientation.");
+                    return null;
+                }
+
+                var flippedPixels = new Color32[sourcePixels.Length];
+                for (var sourceY = 0; sourceY < height; sourceY++)
+                {
+                    // Row N maps to height-1-N, an exact reflection around
+                    // normalized UV Y=0.5. Do not use the alpha centroid or
+                    // alpha bounds: asymmetric ballistic marks intentionally
+                    // place more artwork on one side of their aiming point.
+                    var destinationY = height - 1 - sourceY;
+                    var sourceRow = sourceY * width;
+                    var destinationRow = destinationY * width;
+                    for (var x = 0; x < width; x++)
+                    {
+                        flippedPixels[destinationRow + x] =
+                            sourcePixels[sourceRow + x];
+                    }
+                }
+
+                var mipChain = markTexture.mipmapCount > 1;
+                flipped = new Texture2D(
+                    width,
+                    height,
+                    TextureFormat.RGBA32,
+                    mipChain,
+                    true)
+                {
+                    name = markTexture.name + "_MMGA_G33_ThermalVerticalFlip",
+                    hideFlags = HideFlags.HideAndDontSave,
+                    filterMode = markTexture.filterMode,
+                    wrapMode = markTexture.wrapMode,
+                    anisoLevel = markTexture.anisoLevel
+                };
+                flipped.SetPixels32(flippedPixels);
+                flipped.Apply(mipChain, false);
+
+                MakeMagnifierGreatAgainPlugin.LogInfo(
+                    "Vertically mirrored custom G33 thermal mark '"
+                    + markTexture.name
+                    + "' around authored UV center 0.5 (source alpha rows "
+                    + minimumY
+                    + ".."
+                    + maximumY
+                    + "); native projection and point of aim are preserved.");
+                return flipped;
+            }
+            catch (Exception exception)
+            {
+                if (flipped != null)
+                {
+                    UnityEngine.Object.Destroy(flipped);
+                }
+                MakeMagnifierGreatAgainPlugin.LogWarning(
+                    "Could not create the custom G33 thermal mark texture "
+                    + "orientation copy for '"
+                    + markTexture.name
+                    + "'; retaining the native orientation. "
+                    + exception.Message);
+                return null;
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                if (readable != null)
+                {
+                    UnityEngine.Object.Destroy(readable);
+                }
+                RenderTexture.ReleaseTemporary(temporary);
+            }
         }
 
         internal static void CreateProjectedCollimatorMaterial(
@@ -1138,10 +1311,16 @@ namespace MakeMagnifierGreatAgain
             {
                 UnityEngine.Object.Destroy(state.ProjectedCollimatorMaterial);
             }
+            if (state.ProjectedCollimatorMarkTexture != null)
+            {
+                UnityEngine.Object.Destroy(
+                    state.ProjectedCollimatorMarkTexture);
+            }
 
             state.ProjectedCollimatorRenderer = null;
             state.ProjectedCollimatorMesh = null;
             state.ProjectedCollimatorMaterial = null;
+            state.ProjectedCollimatorMarkTexture = null;
         }
 
         private static void CaptureSkeetOptics(FrontClipOnState state)
