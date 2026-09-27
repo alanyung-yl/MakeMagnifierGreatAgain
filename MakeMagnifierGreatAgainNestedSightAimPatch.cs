@@ -915,7 +915,15 @@ namespace MakeMagnifierGreatAgain
                     animation,
                     childCache),
                 UsesWilcoxBossDonor = usesWilcoxBossDonor,
-                UsesNativeReticleProjection = usesWilcoxBossDonor,
+                // Every custom-G33 3x overlay must preserve the donor's
+                // native screen projection. The older non-BOSS path combined
+                // a render-target-flipped projection matrix with a vertically
+                // mirrored mark texture. That restored mark orientation but
+                // mirrored the projected glass position around screen center,
+                // shifting thermal-on reticles away from their thermal-off
+                // point of aim. BOSS already used this native pair and was the
+                // aligned control case.
+                UsesNativeReticleProjection = nestedG33Child != null,
                 SuppressNestedDonorGlass = usesTargetedCompactReflex
             };
 
@@ -1223,11 +1231,12 @@ namespace MakeMagnifierGreatAgain
                 return;
             }
 
-            // The BOSS post-effect uses an unflipped projection matrix (see
-            // SkeetIrG33ReticlePostProcess), so its native mark texture must
-            // also stay unflipped. Other donors retain the user-confirmed
-            // private texture correction until they receive the same focused
-            // placement test.
+            // The custom-G33 post-effect uses an unflipped projection matrix
+            // (see SkeetIrG33ReticlePostProcess), so the native mark texture
+            // must also stay unflipped. Keeping this pair together preserves
+            // both the mark orientation and the original glass-plane screen
+            // position. The legacy fallback remains only for a malformed G33
+            // route where no immediate donor cache was discovered.
             if (!state.UsesNativeReticleProjection)
             {
                 var sourceMark = state.ProjectedCollimatorMaterial.HasProperty(
