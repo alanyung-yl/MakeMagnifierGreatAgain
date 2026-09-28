@@ -23,6 +23,7 @@ namespace MakeMagnifierGreatAgain
         }
 
         public const string G33TestTemplateId = "31d49a6fcf9e8c1864d7e401";
+        public const string EpicHighG33TemplateId = "31d49a6fcf9e8c1864d7e420";
 
         private void Awake()
         {

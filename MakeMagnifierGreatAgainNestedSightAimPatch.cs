@@ -826,7 +826,12 @@ namespace MakeMagnifierGreatAgain
                         ? childAim.Bone.name : "<missing>")
                     + "', magnified="
                     + (childAim != null && IsMagnifiedChild(
-                        childAim.Mod, childCache)) + ".");
+                        childAim.Mod, childCache))
+                    + DescribeAimSelection(
+                        animation,
+                        skeetAim,
+                        childAim)
+                    + ".");
             }
 
             if (childAim == null || childAim.Bone == null)
@@ -969,6 +974,52 @@ namespace MakeMagnifierGreatAgain
             }
 
             return true;
+        }
+
+        private static string DescribeAimSelection(
+            ProceduralWeaponAnimation animation,
+            ProceduralWeaponAnimation.SightNBone skeetAim,
+            ProceduralWeaponAnimation.SightNBone childAim)
+        {
+            if (animation == null || animation.ScopeAimTransforms == null)
+            {
+                return ", aim selection unavailable";
+            }
+
+            var aims = animation.ScopeAimTransforms;
+            var selectedIndex = aims.Count > 0
+                ? animation.AimIndex % aims.Count
+                : -1;
+            var skeetIndex = -1;
+            var childIndex = -1;
+            var descriptions = new List<string>();
+
+            for (var index = 0; index < aims.Count; index++)
+            {
+                var aim = aims[index];
+                if (ReferenceEquals(aim, skeetAim))
+                {
+                    skeetIndex = index;
+                }
+                if (ReferenceEquals(aim, childAim))
+                {
+                    childIndex = index;
+                }
+
+                var cacheName = aim != null && aim.ScopePrefabCache != null
+                    ? aim.ScopePrefabCache.transform.name
+                    : "<no cache>";
+                var boneName = aim != null && aim.Bone != null
+                    ? aim.Bone.name
+                    : "<no bone>";
+                descriptions.Add(index + ":" + cacheName + "/" + boneName);
+            }
+
+            return ", aimIndex=" + animation.AimIndex
+                + ", selectedIndex=" + selectedIndex
+                + ", skeetIndex=" + skeetIndex
+                + ", childIndex=" + childIndex
+                + ", aims=[" + string.Join(", ", descriptions.ToArray()) + "]";
         }
 
         internal static bool TryGetFrontClipOnState(

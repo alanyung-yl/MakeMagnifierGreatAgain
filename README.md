@@ -18,8 +18,13 @@ This is **v0.5.4**, the initial public proof-of-concept snapshot. It is not prod
 ### EOTech G33 magnifier
 
 - `EOTech G33 magnifier (MMGA test)`
+- `EOTech G33 Unity FTC magnifier (MMGA EpicAIO test)` is a separate item
+  cloned from EpicAIO's EXPS3 high-magnifier pair. At assembly time MMGA hides
+  the baked `ftc_riser`/EXPS3 geometry, promotes the Unity G33 out of that
+  parent, suppresses the pair's baked reticles, and creates a child `mod_scope`
+  at the riser's base position for MMGA-compatible sights.
 - Available from Peacekeeper at loyalty level 1.
-- Accepts compatible 1x optics in its front `mod_scope` slot.
+- Both accept compatible 1x optics in their front `mod_scope` slot.
 
 ### SkeetIR thermal clip-on
 
@@ -29,10 +34,11 @@ This is **v0.5.4**, the initial public proof-of-concept snapshot. It is not prod
 
 ## Installation
 
-1. Install the required SPT 4.1.3 dependencies, including WTT-CommonLib.
+1. Install the required SPT 4.1.3 dependencies: WTT-CommonLib 3.0.6 and
+   Epic's All In One 5.0.1.
 2. Copy the `MakeMagnifierGreatAgain` folder into `SPT_Runtime/user/mods/`.
 3. Restart the SPT server and game.
-4. Purchase either test item from Peacekeeper LL1.
+4. Purchase the test items from Peacekeeper LL1.
 
 ## Known limitations
 

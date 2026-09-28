@@ -22,12 +22,15 @@ public record ModMetadata : IModMetadata
     public Dictionary<string, Range>? ModDependencies { get; init; } = new()
     {
         ["com.wtt.commonlib"] = new Range("~3.0.6"),
+        ["com.epicrangetime.aio"] = new Range("~5.0.1"),
     };
     public string? Url { get; init; }
     public string License { get; init; } = "GPL-3.0-only";
 }
 
-[Injectable(TypePriority = OnLoadOrder.Preload + 1)]
+// EpicAIO 5.0.1 creates its CommonLib items at Preload + 3. Register after
+// that source template exists, while remaining safely before profile loading.
+[Injectable(TypePriority = OnLoadOrder.Preload + 10)]
 public sealed class MakeMagnifierGreatAgainServerMod(
     ISptLogger<MakeMagnifierGreatAgainServerMod> logger,
     WTTServerCommonLib.WTTServerCommonLib commonLib
@@ -35,12 +38,14 @@ public sealed class MakeMagnifierGreatAgainServerMod(
 {
     public async Task OnLoadAsync(CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         await commonLib.CustomItemServiceExtended.CreateCustomItems(
             Assembly.GetExecutingAssembly()
         );
 
         logger.Success(
-            "MakeMagnifierGreatAgain 0.5.1: handed G33 item, trader, and locale " +
+            "MakeMagnifierGreatAgain 0.5.1: handed custom items, traders, and locales " +
             "registration to WTT-CommonLib."
         );
     }

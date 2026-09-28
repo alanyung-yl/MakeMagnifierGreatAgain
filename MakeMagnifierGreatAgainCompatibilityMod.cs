@@ -22,6 +22,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
 ) : IOnLoad
 {
     private const string G33TemplateId = "31d49a6fcf9e8c1864d7e401";
+    private const string EpicHighG33TemplateId = "31d49a6fcf9e8c1864d7e420";
     private const string SkeetIrTemplateId = "31d49a6fcf9e8c1864d7e410";
     private const string VanillaHhsTemplateId = "5c07dd120db834001c39092d";
     private const string FrontScopeSlotName = "mod_scope";
@@ -75,6 +76,27 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             );
         }
 
+        MongoId epicHighG33Id = EpicHighG33TemplateId;
+        if (!templateTable.Items.TryGetValue(epicHighG33Id, out var epicHighG33Template))
+        {
+            throw new InvalidOperationException(
+                $"MakeMagnifierGreatAgain: EpicAIO high G33 clone {EpicHighG33TemplateId} was not registered."
+            );
+        }
+
+        var epicHighTargetFilter = epicHighG33Template
+            .Properties?.Slots?.FirstOrDefault(slot =>
+                string.Equals(slot.Name, FrontScopeSlotName, StringComparison.Ordinal)
+            )
+            ?.Properties?.Filters?.FirstOrDefault();
+
+        if (epicHighTargetFilter == null)
+        {
+            throw new InvalidOperationException(
+                "MakeMagnifierGreatAgain: the EpicAIO high G33 clone mod_scope filter was not found."
+            );
+        }
+
         MongoId skeetIrId = SkeetIrTemplateId;
         templateTable.Items.TryGetValue(skeetIrId, out var skeetIrTemplate);
         var skeetIrTargetFilter = skeetIrTemplate
@@ -106,7 +128,9 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         // are therefore not mistaken for a standard rail. Exclude the G33's own
         // generated slot so this discovery cannot become self-referential.
         var sightRailFilters = templateTable.Items.Values
-            .Where(item => !item.Id.Equals(g33Id))
+            .Where(item =>
+                !item.Id.Equals(g33Id)
+                && !item.Id.Equals(epicHighG33Id))
             .SelectMany(GetScopeFilters)
             .Where(filter => filter.Filter?.Overlaps(directRailAnchors) == true)
             .ToList();
@@ -146,12 +170,17 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
 
         var g33Discovered = onePowerOptics
             .Concat(railMounts)
-            .Where(id => !id.Equals(g33Id))
+            .Where(id =>
+                !id.Equals(g33Id)
+                && !id.Equals(epicHighG33Id))
             .ToHashSet();
 
         targetFilter.Filter ??= [];
         targetFilter.Filter.Clear();
         targetFilter.Filter.UnionWith(g33Discovered);
+        epicHighTargetFilter.Filter ??= [];
+        epicHighTargetFilter.Filter.Clear();
+        epicHighTargetFilter.Filter.UnionWith(g33Discovered);
 
         var excludedVisionDeviceIds = templateTable.Items.Values
             .Where(item =>
@@ -196,6 +225,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             .Where(id => !id.Equals(skeetIrId))
             .ToHashSet();
         skeetDiscovered.Add(g33Id);
+        skeetDiscovered.Add(epicHighG33Id);
 
         if (skeetIrTargetFilter != null)
         {
@@ -210,7 +240,9 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         var magnifiedSightIds = templateTable.Items.Values
             .Where(IsMagnifiedSight)
             .Select(item => item.Id)
-            .Where(id => !id.Equals(g33Id))
+            .Where(id =>
+                !id.Equals(g33Id)
+                && !id.Equals(epicHighG33Id))
             .ToHashSet();
 
         // Rail-facing mounts that failed the safe-mount test would otherwise
@@ -228,6 +260,9 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         g33Template.Properties!.ConflictingItems ??= [];
         g33Template.Properties.ConflictingItems.UnionWith(magnifiedSightIds);
         g33Template.Properties.ConflictingItems.UnionWith(rejectedRailMountIds);
+        epicHighG33Template.Properties!.ConflictingItems ??= [];
+        epicHighG33Template.Properties.ConflictingItems.UnionWith(magnifiedSightIds);
+        epicHighG33Template.Properties.ConflictingItems.UnionWith(rejectedRailMountIds);
 
         if (skeetIrTemplate?.Properties != null)
         {
@@ -239,19 +274,24 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             templateTable,
             g33Id
         );
+        var epicHighParentSlotResult = AddToHhsCompatibleParentSlots(
+            templateTable,
+            epicHighG33Id
+        );
 
         logger.Success(
             $"MakeMagnifierGreatAgain: discovered {onePowerOptics.Count} pure 1x optic(s) "
                 + $"and {railMounts.Count} sight-rail mount(s); "
-                + $"the G33 mod_scope filter now contains {g33Discovered.Count} item(s). "
+                + $"both G33 mod_scope filters now contain {g33Discovered.Count} item(s). "
                 + (skeetIrTargetFilter != null
                     ? $"The Skeet-IR filter contains {skeetSightIds.Count} sight(s), "
-                        + $"{skeetMountIds.Count} mount(s), and the G33. "
+                        + $"{skeetMountIds.Count} mount(s), and both G33 variants. "
                     : string.Empty)
                 + $"Added {magnifiedSightIds.Count} magnified-sight and "
                 + $"{rejectedRailMountIds.Count} rejected-mount conflict(s). "
-                + $"Verified {parentSlotResult.Matching} HHS-compatible parent filter(s) "
-                + $"and added the G33 to {parentSlotResult.Added}."
+                + $"Verified {parentSlotResult.Matching} HHS-compatible parent filter(s); "
+                + $"added the custom-bundle G33 to {parentSlotResult.Added} and "
+                + $"the EpicAIO high clone to {epicHighParentSlotResult.Added}."
         );
 
         logger.Debug(
