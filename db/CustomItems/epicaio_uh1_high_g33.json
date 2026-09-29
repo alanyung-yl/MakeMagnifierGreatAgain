@@ -1,0 +1,59 @@
+{
+  "31d49a6fcf9e8c1864d7e430": {
+    "itemTplToClone": "a5c171496c1870f205a3c972",
+    "newName": "scope_all_eotech_g33_unity_black_mmga_test",
+    "parentId": "55818ad54bdc2ddc698b4569",
+    "handbookParentId": "5b5f742686f774093e6cb4ff",
+    "overrideProperties": {
+      "ExaminedByDefault": true,
+      "Slots": [
+        {
+          "_id": "31d49a6fcf9e8c1864d7e432",
+          "_mergeSlotWithChildren": false,
+          "_name": "mod_scope",
+          "_parent": "31d49a6fcf9e8c1864d7e430",
+          "_props": {
+            "filters": [
+              {
+                "Filter": [],
+                "Shift": 0
+              }
+            ]
+          },
+          "_proto": "55d30c4c4bdc2db4468b457e",
+          "_required": false
+        }
+      ]
+    },
+    "locales": {
+      "en": {
+        "name": "EOTECH G33 Magnifier w/ Unity FAST FTC OMNI",
+        "shortName": "G33 FTC",
+        "description": "A black EOTECH G33 magnifier on a Unity FAST FTC OMNI mount, adapted from EpicAIO with an MMGA-compatible front mod_scope slot."
+      }
+    },
+    "registerInHandbook": true,
+    "registerInFleaPrices": true,
+    "fleaPriceRoubles": 64000,
+    "handbookPriceRoubles": 35000,
+    "addtoModSlots": false,
+    "addtoTraders": true,
+    "traders": {
+      "PEACEKEEPER": {
+        "31d49a6fcf9e8c1864d7e431": {
+          "barterSettings": {
+            "loyalLevel": 1,
+            "unlimitedCount": true,
+            "stackObjectsCount": 100
+          },
+          "barters": [
+            {
+              "count": 100,
+              "_tpl": "5696686a4bdc2da3298b456a"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

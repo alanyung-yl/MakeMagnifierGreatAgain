@@ -32,8 +32,8 @@
     },
     "locales": {
       "en": {
-        "name": "EOTech G33 magnifier (MMGA test)",
-        "shortName": "G33 MMGA",
+        "name": "EOTECH G33 Magnifier",
+        "shortName": "G33",
         "description": "Proof-of-concept standalone EOTech G33 magnifier from MakeMagnifierGreatAgain. Pair it with a supported 1x optic in its front mod_scope slot."
       }
     },

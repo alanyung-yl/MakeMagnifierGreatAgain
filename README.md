@@ -8,6 +8,8 @@ This is **v0.5.4**, the initial public proof-of-concept snapshot. It is not prod
 
 - Standalone EOTech G33 magnifier test item.
 - SkeetIR-L thermal clip-on test item with separated mount base geometry.
+- Automatic Skeet child-slot height compensation on EpicAIO's black/FDE Unity
+  FAST optic risers.
 - Recursive discovery of compatible optics, risers, and scope mounts.
 - Nested optic reticle propagation into the magnifier PiP view.
 - Inline and flipped magnifier modes using EFT optic controls.
@@ -15,16 +17,19 @@ This is **v0.5.4**, the initial public proof-of-concept snapshot. It is not prod
 
 ## Test items
 
-### EOTech G33 magnifier
+### EOTECH G33 magnifiers
 
-- `EOTech G33 magnifier (MMGA test)`
-- `EOTech G33 Unity FTC magnifier (MMGA EpicAIO test)` is a separate item
-  cloned from EpicAIO's EXPS3 high-magnifier pair. At assembly time MMGA hides
-  the baked `ftc_riser`/EXPS3 geometry, promotes the Unity G33 out of that
-  parent, suppresses the pair's baked reticles, and creates a child `mod_scope`
-  at the riser's base position for MMGA-compatible sights.
+- `EOTECH G33 Magnifier`
+- `EOTECH G33 Magnifier w/ Unity FAST FTC OMNI (FDE)`
+- `EOTECH G33 Magnifier w/ Unity FAST FTC OMNI`
+- `EOTECH G33 Magnifier (Tan)`
+- The FDE and black Unity variants are cloned from EpicAIO's EXPS3 and UH-1
+  high-magnifier pairs. The tan variant is cloned from the EXPS3 low-magnifier
+  pair. At assembly time MMGA hides the baked collimator and any paired riser,
+  preserves the G33, suppresses the donor reticles, and creates a functional
+  child `mod_scope` at the original sight/riser anchor.
 - Available from Peacekeeper at loyalty level 1.
-- Both accept pure 1x optics and rail carriers with a recursive pure-1x route
+- All four accept pure 1x optics and rail carriers with a recursive pure-1x route
   in their front `mod_scope` slot. A scope mount whose own optic slot accepts
   a magnified sight is excluded from the G33 whitelist; incompatible scope
   mounts reached through a separate riser are regulated with item conflicts.
@@ -34,8 +39,8 @@ This is **v0.5.4**, the initial public proof-of-concept snapshot. It is not prod
   built-in trusted risers. Add item template IDs to `config.json`'s
   `additionalWhitelistIds` array to explicitly add user-selected items to the
   G33-compatible whitelist and the Unity FAST riser filters derived from it.
-- The two MMGA G33 variants conflict with themselves and each other, limiting
-  each weapon assembly to one MMGA/Unity G33 at a time.
+- The custom-bundle, FDE Unity, black Unity, and tan G33 variants conflict with
+  themselves and each other, limiting each weapon assembly to one MMGA G33.
 
 ### SkeetIR thermal clip-on
 
@@ -44,6 +49,14 @@ This is **v0.5.4**, the initial public proof-of-concept snapshot. It is not prod
 - Provides inline and flipped-to-the-side 1x modes.
 - Accepts ordinary 1x and magnified sights while excluding night/thermal
   optics, offset/angled mounts, and incompatible nested riser paths.
+- EpicAIO's black/FDE Unity FAST optic risers explicitly accept Skeet. When
+  Skeet is installed directly on either one, MMGA lowers only Skeet's child
+  `mod_scope` by that riser's prefab-local root-to-slot displacement so the
+  child optic returns to the original rail plane. When WeaponCustomizer owns
+  the occupied slot, MMGA rebases its original and saved transforms onto that
+  corrected rail plane; the correction therefore survives insertion while
+  normal slot dragging remains available. Other risers are intentionally left
+  unchanged. Skeet conflicts with itself to prevent nested duplicate Skeets.
 
 ## Installation
 

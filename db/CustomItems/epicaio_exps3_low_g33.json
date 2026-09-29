@@ -1,0 +1,59 @@
+{
+  "31d49a6fcf9e8c1864d7e440": {
+    "itemTplToClone": "7ca248803b89788492384ba2",
+    "newName": "scope_all_eotech_g33_tan_mmga",
+    "parentId": "55818ad54bdc2ddc698b4569",
+    "handbookParentId": "5b5f742686f774093e6cb4ff",
+    "overrideProperties": {
+      "ExaminedByDefault": true,
+      "Slots": [
+        {
+          "_id": "31d49a6fcf9e8c1864d7e442",
+          "_mergeSlotWithChildren": false,
+          "_name": "mod_scope",
+          "_parent": "31d49a6fcf9e8c1864d7e440",
+          "_props": {
+            "filters": [
+              {
+                "Filter": [],
+                "Shift": 0
+              }
+            ]
+          },
+          "_proto": "55d30c4c4bdc2db4468b457e",
+          "_required": false
+        }
+      ]
+    },
+    "locales": {
+      "en": {
+        "name": "EOTECH G33 Magnifier (Tan)",
+        "shortName": "G33 Tan",
+        "description": "A tan EOTECH G33 magnifier adapted from EpicAIO's EXPS3 low-magnifier pair, with the baked EXPS3 replaced by an MMGA-compatible front mod_scope slot."
+      }
+    },
+    "registerInHandbook": true,
+    "registerInFleaPrices": true,
+    "fleaPriceRoubles": 46000,
+    "handbookPriceRoubles": 35000,
+    "addtoModSlots": false,
+    "addtoTraders": true,
+    "traders": {
+      "PEACEKEEPER": {
+        "31d49a6fcf9e8c1864d7e441": {
+          "barterSettings": {
+            "loyalLevel": 1,
+            "unlimitedCount": true,
+            "stackObjectsCount": 100
+          },
+          "barters": [
+            {
+              "count": 100,
+              "_tpl": "5696686a4bdc2da3298b456a"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -23,6 +23,8 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
 {
     private const string G33TemplateId = "31d49a6fcf9e8c1864d7e401";
     private const string EpicHighG33TemplateId = "31d49a6fcf9e8c1864d7e420";
+    private const string EpicUh1HighG33TemplateId = "31d49a6fcf9e8c1864d7e430";
+    private const string EpicExps3LowG33TemplateId = "31d49a6fcf9e8c1864d7e440";
     private const string SkeetIrTemplateId = "31d49a6fcf9e8c1864d7e410";
     private const string Lt101RiserTemplateId = "5c064c400db834001d23f468";
     private const string EpicUnityFastRiserBlackTemplateId = "2e681ada9836f6e030080191";
@@ -141,6 +143,59 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             );
         }
 
+        MongoId epicUh1HighG33Id = EpicUh1HighG33TemplateId;
+        if (!templateTable.Items.TryGetValue(
+            epicUh1HighG33Id,
+            out var epicUh1HighG33Template))
+        {
+            throw new InvalidOperationException(
+                $"MakeMagnifierGreatAgain: EpicAIO UH-1 high G33 clone "
+                    + $"{EpicUh1HighG33TemplateId} was not registered."
+            );
+        }
+
+        var epicUh1HighTargetFilter = epicUh1HighG33Template
+            .Properties?.Slots?.FirstOrDefault(slot =>
+                string.Equals(slot.Name, FrontScopeSlotName, StringComparison.Ordinal)
+            )
+            ?.Properties?.Filters?.FirstOrDefault();
+
+        if (epicUh1HighTargetFilter == null)
+        {
+            throw new InvalidOperationException(
+                "MakeMagnifierGreatAgain: the EpicAIO UH-1 high G33 clone "
+                    + "mod_scope filter was not found."
+            );
+        }
+
+        MongoId epicExps3LowG33Id = EpicExps3LowG33TemplateId;
+        if (!templateTable.Items.TryGetValue(
+            epicExps3LowG33Id,
+            out var epicExps3LowG33Template))
+        {
+            throw new InvalidOperationException(
+                $"MakeMagnifierGreatAgain: EpicAIO EXPS3 low G33 clone "
+                    + $"{EpicExps3LowG33TemplateId} was not registered."
+            );
+        }
+
+        var epicExps3LowTargetFilter = epicExps3LowG33Template
+            .Properties?.Slots?.FirstOrDefault(slot =>
+                string.Equals(slot.Name, FrontScopeSlotName, StringComparison.Ordinal)
+            )
+            ?.Properties?.Filters?.FirstOrDefault();
+
+        if (epicExps3LowTargetFilter == null)
+        {
+            throw new InvalidOperationException(
+                "MakeMagnifierGreatAgain: the EpicAIO EXPS3 low G33 clone "
+                    + "mod_scope filter was not found."
+            );
+        }
+
+        MongoId skeetIrId = SkeetIrTemplateId;
+        templateTable.Items.TryGetValue(skeetIrId, out var skeetIrTemplate);
+
         MongoId[] epicUnityFastRiserIds =
         [
             EpicUnityFastRiserBlackTemplateId,
@@ -168,8 +223,6 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
                 (Owner: riserTemplate, Filter: filter)));
         }
 
-        MongoId skeetIrId = SkeetIrTemplateId;
-        templateTable.Items.TryGetValue(skeetIrId, out var skeetIrTemplate);
         var skeetIrTargetFilter = skeetIrTemplate
             ?.Properties?.Slots?.FirstOrDefault(slot =>
                 string.Equals(slot.Name, FrontScopeSlotName, StringComparison.Ordinal)
@@ -199,6 +252,8 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         {
             G33TemplateId,
             EpicHighG33TemplateId,
+            EpicUh1HighG33TemplateId,
+            EpicExps3LowG33TemplateId,
             SkeetIrTemplateId,
         };
         var userWhitelistIds = new HashSet<MongoId>();
@@ -236,7 +291,9 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         var sightRailFilters = templateTable.Items.Values
             .Where(item =>
                 !item.Id.Equals(g33Id)
-                && !item.Id.Equals(epicHighG33Id))
+                && !item.Id.Equals(epicHighG33Id)
+                && !item.Id.Equals(epicUh1HighG33Id)
+                && !item.Id.Equals(epicExps3LowG33Id))
             .SelectMany(item => GetScopeFilters(item)
                 .Select(filter => (Owner: item, Filter: filter)))
             .Where(entry =>
@@ -293,6 +350,8 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             .Where(id =>
                 !id.Equals(g33Id)
                 && !id.Equals(epicHighG33Id)
+                && !id.Equals(epicUh1HighG33Id)
+                && !id.Equals(epicExps3LowG33Id)
                 && !id.Equals(skeetIrId))
             .ToHashSet();
 
@@ -302,17 +361,24 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         epicHighTargetFilter.Filter ??= [];
         epicHighTargetFilter.Filter.Clear();
         epicHighTargetFilter.Filter.UnionWith(g33Discovered);
+        epicUh1HighTargetFilter.Filter ??= [];
+        epicUh1HighTargetFilter.Filter.Clear();
+        epicUh1HighTargetFilter.Filter.UnionWith(g33Discovered);
+        epicExps3LowTargetFilter.Filter ??= [];
+        epicExps3LowTargetFilter.Filter.Clear();
+        epicExps3LowTargetFilter.Filter.UnionWith(g33Discovered);
 
         // EpicAIO's black and FDE Unity FAST risers are known universal rail
         // risers. Give their optic slots the same dynamically discovered 1x
-        // optic/carrier base as MMGA's G33. The generic rail-mount pass below
-        // deliberately adds both G33 variants as well, preserving the global
-        // riser -> G33 compatibility policy.
+        // optic/carrier base as MMGA's G33, plus Skeet as the one supported
+        // outer clip-on for the FAST-specific height correction. The generic
+        // rail-mount pass below deliberately adds all G33 variants as well.
         foreach (var (_, filter) in epicUnityFastRiserFilters)
         {
             filter.Filter ??= [];
             filter.Filter.Clear();
             filter.Filter.UnionWith(g33Discovered);
+            filter.Filter.Add(skeetIrId);
         }
 
         var excludedVisionDeviceIds = templateTable.Items.Values
@@ -351,6 +417,8 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             .ToHashSet();
         skeetDiscovered.Add(g33Id);
         skeetDiscovered.Add(epicHighG33Id);
+        skeetDiscovered.Add(epicUh1HighG33Id);
+        skeetDiscovered.Add(epicExps3LowG33Id);
 
         if (skeetIrTargetFilter != null)
         {
@@ -370,8 +438,10 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             .Where(id =>
                 !id.Equals(g33Id)
                 && !id.Equals(epicHighG33Id)
+                && !id.Equals(epicUh1HighG33Id)
+                && !id.Equals(epicExps3LowG33Id)
                 && !userWhitelistIds.Contains(id)
-                // Skeet is the valid outer parent of either G33. Putting it
+                // Skeet is the valid outer parent of every G33. Putting it
                 // in a G33 conflict list blocks Skeet -> G33 as well as the
                 // reverse because EFT evaluates conflicts assembly-wide.
                 && !id.Equals(skeetIrId))
@@ -405,20 +475,30 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         // beneath that first Skeet through the riser's globally-owned filter.
         skeetNestedCarrierConflicts.Add(skeetIrId);
 
-        g33Template.Properties!.ConflictingItems ??= [];
-        g33Template.Properties.ConflictingItems.UnionWith(nonOnePowerSightIds);
-        g33Template.Properties.ConflictingItems.UnionWith(g33NestedCarrierConflicts);
-        g33Template.Properties.ConflictingItems.ExceptWith(userWhitelistIds);
-        g33Template.Properties.ConflictingItems.Add(g33Id);
-        g33Template.Properties.ConflictingItems.Add(epicHighG33Id);
-        g33Template.Properties.ConflictingItems.Remove(skeetIrId);
-        epicHighG33Template.Properties!.ConflictingItems ??= [];
-        epicHighG33Template.Properties.ConflictingItems.UnionWith(nonOnePowerSightIds);
-        epicHighG33Template.Properties.ConflictingItems.UnionWith(g33NestedCarrierConflicts);
-        epicHighG33Template.Properties.ConflictingItems.ExceptWith(userWhitelistIds);
-        epicHighG33Template.Properties.ConflictingItems.Add(g33Id);
-        epicHighG33Template.Properties.ConflictingItems.Add(epicHighG33Id);
-        epicHighG33Template.Properties.ConflictingItems.Remove(skeetIrId);
+        MongoId[] g33VariantIds =
+        [
+            g33Id,
+            epicHighG33Id,
+            epicUh1HighG33Id,
+            epicExps3LowG33Id,
+        ];
+        TemplateItem[] g33VariantTemplates =
+        [
+            g33Template,
+            epicHighG33Template,
+            epicUh1HighG33Template,
+            epicExps3LowG33Template,
+        ];
+        foreach (var template in g33VariantTemplates)
+        {
+            template.Properties!.ConflictingItems ??= [];
+            template.Properties.ConflictingItems.UnionWith(nonOnePowerSightIds);
+            template.Properties.ConflictingItems.UnionWith(
+                g33NestedCarrierConflicts);
+            template.Properties.ConflictingItems.ExceptWith(userWhitelistIds);
+            template.Properties.ConflictingItems.UnionWith(g33VariantIds);
+            template.Properties.ConflictingItems.Remove(skeetIrId);
+        }
 
         if (skeetIrTemplate?.Properties != null)
         {
@@ -426,14 +506,17 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             skeetIrTemplate.Properties.ConflictingItems.UnionWith(excludedVisionDeviceIds);
             skeetIrTemplate.Properties.ConflictingItems.UnionWith(
                 skeetNestedCarrierConflicts);
+            skeetIrTemplate.Properties.ConflictingItems.Add(skeetIrId);
         }
 
         // WTT-style global slot registration cannot express "only while this
-        // riser is nested". Add both G33 variants to every safe rail-facing
+        // riser is nested". Add all G33 variants to every safe rail-facing
         // mount slot; the G33 conflicts above police incompatible branches.
         var railMountFilters = 0;
         var railMountCustomAdded = 0;
         var railMountEpicAdded = 0;
+        var railMountEpicUh1Added = 0;
+        var railMountEpicExps3LowAdded = 0;
         foreach (var (owner, filter) in sightRailFilters)
         {
             if (!IsScopeCarrier(owner)
@@ -453,6 +536,14 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             {
                 railMountEpicAdded++;
             }
+            if (filter.Filter.Add(epicUh1HighG33Id))
+            {
+                railMountEpicUh1Added++;
+            }
+            if (filter.Filter.Add(epicExps3LowG33Id))
+            {
+                railMountEpicExps3LowAdded++;
+            }
         }
 
         var parentSlotResult = AddToHhsCompatibleParentSlots(
@@ -463,20 +554,35 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             templateTable,
             epicHighG33Id
         );
+        var epicUh1HighParentSlotResult = AddToHhsCompatibleParentSlots(
+            templateTable,
+            epicUh1HighG33Id
+        );
+        var epicExps3LowParentSlotResult = AddToHhsCompatibleParentSlots(
+            templateTable,
+            epicExps3LowG33Id
+        );
 
         ValidateEpicUnityFastRiserFilters(
             epicUnityFastRiserFilters,
             g33Discovered,
             g33Id,
-            epicHighG33Id);
+            epicHighG33Id,
+            epicUh1HighG33Id,
+            epicExps3LowG33Id,
+            skeetIrId);
 
         ValidateRootFilters(
             templateTable,
             g33Template,
             epicHighG33Template,
+            epicUh1HighG33Template,
+            epicExps3LowG33Template,
             skeetIrTemplate,
             targetFilter,
             epicHighTargetFilter,
+            epicUh1HighTargetFilter,
+            epicExps3LowTargetFilter,
             skeetIrTargetFilter,
             onePowerCandidates,
             excludedVisionDeviceIds,
@@ -507,26 +613,29 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             $"MakeMagnifierGreatAgain: discovered {onePowerOptics.Count} pure 1x optic(s) "
                 + $"and {g33Carriers.Count} G33-compatible sight carrier(s); "
                 + $"applied {userWhitelistIds.Count} user whitelist override(s); "
-                + $"both G33 mod_scope filters now contain {g33Discovered.Count} item(s). "
+                + $"all four G33 mod_scope filters now contain {g33Discovered.Count} item(s). "
                 + (skeetIrTargetFilter != null
                     ? $"The Skeet-IR filter contains {skeetSightIds.Count} sight(s), "
-                        + $"{skeetCarrierIds.Count} carrier(s), and both G33 variants. "
+                        + $"{skeetCarrierIds.Count} carrier(s), and all four G33 variants. "
                     : string.Empty)
                 + $"Added {nonOnePowerSightIds.Count} non-1x-sight, "
                 + $"{g33NestedCarrierConflicts.Count} G33 nested-carrier, and "
                 + $"{skeetNestedCarrierConflicts.Count} Skeet nested-carrier conflict(s). "
-                + $"Whitelisted both G33 variants in {railMountFilters} rail-facing mount filter(s) "
-                + $"(new: {railMountCustomAdded}/{railMountEpicAdded}). "
+                + $"Whitelisted all four G33 variants in {railMountFilters} rail-facing mount filter(s) "
+                + $"(new: {railMountCustomAdded}/{railMountEpicAdded}/"
+                + $"{railMountEpicUh1Added}/{railMountEpicExps3LowAdded}). "
                 + $"Synchronized {epicUnityFastRiserFilters.Count} EpicAIO Unity FAST riser "
-                + $"mod_scope filter(s) with the G33-compatible whitelist. "
-                + "Made the two G33 variants mutually exclusive. "
+                + $"mod_scope filter(s) with the G33-compatible whitelist and Skeet. "
+                + "Made the four G33 variants mutually exclusive. "
                 + $"Rejected {rejectedG33ScopeMountCount} G33 scope mount(s) with a magnified branch; retained "
                 + $"{integratedIronCarrierCount} integrated-iron carrier(s). "
                 + $"Excluded {platformBoundCarrierIds.Count} platform-bound carrier(s) "
                 + $"seen on fewer than {MinimumGeneralRailHostCount} rail host(s). "
                 + $"Verified {parentSlotResult.Matching} HHS-compatible parent filter(s); "
                 + $"added the custom-bundle G33 to {parentSlotResult.Added} and "
-                + $"the EpicAIO high clone to {epicHighParentSlotResult.Added}."
+                + $"the EpicAIO FDE/black/tan clones to {epicHighParentSlotResult.Added}/"
+                + $"{epicUh1HighParentSlotResult.Added}/"
+                + $"{epicExps3LowParentSlotResult.Added}."
         );
 
         logger.Debug(
@@ -559,11 +668,17 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         IEnumerable<(TemplateItem Owner, SlotFilter Filter)> riserFilters,
         HashSet<MongoId> g33Discovered,
         MongoId g33Id,
-        MongoId epicHighG33Id)
+        MongoId epicHighG33Id,
+        MongoId epicUh1HighG33Id,
+        MongoId epicExps3LowG33Id,
+        MongoId skeetIrId)
     {
         var expected = g33Discovered.ToHashSet();
         expected.Add(g33Id);
         expected.Add(epicHighG33Id);
+        expected.Add(epicUh1HighG33Id);
+        expected.Add(epicExps3LowG33Id);
+        expected.Add(skeetIrId);
 
         foreach (var (owner, filter) in riserFilters)
         {
@@ -583,55 +698,79 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         TemplateTable templateTable,
         TemplateItem g33Template,
         TemplateItem epicHighG33Template,
+        TemplateItem epicUh1HighG33Template,
+        TemplateItem epicExps3LowG33Template,
         TemplateItem? skeetTemplate,
         SlotFilter g33Filter,
         SlotFilter epicHighG33Filter,
+        SlotFilter epicUh1HighG33Filter,
+        SlotFilter epicExps3LowG33Filter,
         SlotFilter? skeetFilter,
         HashSet<MongoId> onePowerOptics,
         HashSet<MongoId> excludedVisionDeviceIds,
         HashSet<MongoId> platformBoundCarrierIds,
         HashSet<MongoId> userWhitelistIds)
     {
-        ValidateG33RootFilter(
-            "custom-bundle G33",
-            templateTable,
+        MongoId[] variantIds =
+        [
+            G33TemplateId,
+            EpicHighG33TemplateId,
+            EpicUh1HighG33TemplateId,
+            EpicExps3LowG33TemplateId,
+        ];
+        TemplateItem[] variantTemplates =
+        [
+            g33Template,
+            epicHighG33Template,
+            epicUh1HighG33Template,
+            epicExps3LowG33Template,
+        ];
+        SlotFilter[] variantFilters =
+        [
             g33Filter,
-            onePowerOptics,
-            platformBoundCarrierIds,
-            userWhitelistIds);
-        ValidateG33RootFilter(
-            "EpicAIO G33",
-            templateTable,
             epicHighG33Filter,
-            onePowerOptics,
-            platformBoundCarrierIds,
-            userWhitelistIds);
+            epicUh1HighG33Filter,
+            epicExps3LowG33Filter,
+        ];
+        string[] variantLabels =
+        [
+            "custom-bundle G33",
+            "EpicAIO FDE G33",
+            "EpicAIO black G33",
+            "EpicAIO tan G33",
+        ];
+        for (var index = 0; index < variantFilters.Length; index++)
+        {
+            ValidateG33RootFilter(
+                variantLabels[index],
+                templateTable,
+                variantFilters[index],
+                onePowerOptics,
+                platformBoundCarrierIds,
+                userWhitelistIds);
+        }
 
         if (skeetFilter?.Filter == null)
         {
             return;
         }
 
-        MongoId g33Id = G33TemplateId;
-        MongoId epicHighG33Id = EpicHighG33TemplateId;
         MongoId skeetId = SkeetIrTemplateId;
-        var hierarchyIsInvalid = !skeetFilter.Filter.Contains(g33Id)
-            || !skeetFilter.Filter.Contains(epicHighG33Id)
-            || g33Filter.Filter?.Contains(skeetId) == true
-            || epicHighG33Filter.Filter?.Contains(skeetId) == true
-            || g33Template.Properties?.ConflictingItems?.Contains(g33Id) != true
-            || g33Template.Properties?.ConflictingItems?.Contains(epicHighG33Id) != true
-            || epicHighG33Template.Properties?.ConflictingItems?.Contains(g33Id) != true
-            || epicHighG33Template.Properties?.ConflictingItems?.Contains(epicHighG33Id) != true
-            || g33Template.Properties?.ConflictingItems?.Contains(skeetId) == true
-            || epicHighG33Template.Properties?.ConflictingItems?.Contains(skeetId) == true
-            || skeetTemplate?.Properties?.ConflictingItems?.Contains(g33Id) == true
-            || skeetTemplate?.Properties?.ConflictingItems?.Contains(epicHighG33Id) == true;
+        var hierarchyIsInvalid = variantIds.Any(id =>
+                !skeetFilter.Filter.Contains(id)
+                || skeetTemplate?.Properties?.ConflictingItems?.Contains(id) == true)
+            || variantFilters.Any(filter =>
+                filter.Filter?.Contains(skeetId) == true)
+            || variantTemplates.Any(template =>
+                template.Properties?.ConflictingItems?.Contains(skeetId) == true
+                || variantIds.Any(id =>
+                    template.Properties?.ConflictingItems?.Contains(id) != true))
+            || skeetTemplate?.Properties?.ConflictingItems?.Contains(skeetId) != true;
         if (hierarchyIsInvalid)
         {
             throw new InvalidOperationException(
                 "MakeMagnifierGreatAgain: hierarchy validation failed; expected "
-                    + "Skeet -> exactly one mutually exclusive G33 variant -> 1x sight.");
+                    + "Skeet -> exactly one of four mutually exclusive G33 variants -> 1x sight.");
         }
 
         var invalidSkeetIds = skeetFilter.Filter.Where(id =>

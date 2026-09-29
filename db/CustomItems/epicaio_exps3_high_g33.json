@@ -27,9 +27,9 @@
     },
     "locales": {
       "en": {
-        "name": "EOTech G33 Unity FTC magnifier (MMGA EpicAIO test)",
-        "shortName": "G33 FTC MMGA",
-        "description": "MMGA test item cloned from EpicAIO's EXPS3 high-magnifier pair, with a configurable front mod_scope slot."
+        "name": "EOTECH G33 Magnifier w/ Unity FAST FTC OMNI (FDE)",
+        "shortName": "G33 FTC FDE",
+        "description": "An FDE EOTECH G33 magnifier on a Unity FAST FTC OMNI mount, adapted from EpicAIO with an MMGA-compatible front mod_scope slot."
       }
     },
     "registerInHandbook": true,

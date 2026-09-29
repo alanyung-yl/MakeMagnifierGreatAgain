@@ -9,27 +9,40 @@ using UnityEngine;
 namespace MakeMagnifierGreatAgain
 {
     /// <summary>
-    /// Adapts EpicAIO's combined EXPS3/Unity-G33 prefab only for MMGA's
-    /// separately cloned template. EFT requires a live transform matching a
-    /// database slot before ObjectsFactory.AttachMods begins its bone scan.
+    /// Adapts EpicAIO's combined EXPS3/UH-1 G33 prefabs only for MMGA's
+    /// separately cloned FDE, black, and tan templates. EFT requires a live
+    /// transform matching a database slot before ObjectsFactory.AttachMods
+    /// scans bones.
     /// </summary>
     [HarmonyPatch(typeof(ObjectsFactory), nameof(ObjectsFactory.AttachMods))]
     internal static class EpicHighG33PrefabPatch
     {
-        private const string EpicHighPairTemplateId =
+        private const string EpicExps3HighPairTemplateId =
             "41e97223a2ad6374a096ae14";
+        private const string EpicUh1HighPairTemplateId =
+            "a5c171496c1870f205a3c972";
+        private const string EpicExps3LowPairTemplateId =
+            "7ca248803b89788492384ba2";
         private const string G33RuntimeRootName =
             "scope_all_eotech_g33_mmga_test_epicaio_unity";
         private const string RiserName = "ftc_riser";
+        private const string UnityFtcRiserName = "Unity FTC Riser";
+        private const string Uh1DonorSightName =
+            "scope_all_vortex_razor_amg_uh-1 (merge)";
+        private const string Exps3LowDonorSightName =
+            "scope_all_eotech_exps3";
         private const string UnityG33Name = "Unity G33";
+        private const string G33BaseName = "G33 Base";
         private const string AimBoneName = "mod_aim_camera";
         private const string ScopeSlotName = "mod_scope";
         private const float CalibratedUnityG33FieldOfView = 7.5f;
         private static readonly Vector3 ScopeSlotLocalEulerAngles =
             new Vector3(270f, 0f, 0f);
 
-        private static bool _adaptedLogWritten;
-        private static bool _missingHierarchyWarningWritten;
+        private static readonly HashSet<string> AdaptedTemplateLogs =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly HashSet<string> MissingHierarchyWarnings =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         [HarmonyPrefix]
         private static void Prefix(
@@ -50,19 +63,14 @@ namespace MakeMagnifierGreatAgain
             // EpicAIO and MMGA may receive successive instances from the same
             // prefab pool. Always restore the donor hierarchy when its original
             // template is assembled.
-            if (string.Equals(
-                templateId,
-                EpicHighPairTemplateId,
-                StringComparison.OrdinalIgnoreCase))
+            if (IsDonorPairTemplate(templateId))
             {
                 state?.RestoreEpicPair();
                 return;
             }
 
-            if (!string.Equals(
-                templateId,
-                MakeMagnifierGreatAgainPlugin.EpicHighG33TemplateId,
-                StringComparison.OrdinalIgnoreCase))
+            var pairLabel = GetMmgaPairLabel(templateId);
+            if (pairLabel == null)
             {
                 return;
             }
@@ -72,38 +80,97 @@ namespace MakeMagnifierGreatAgain
                 state = prefabRoot.gameObject.AddComponent<EpicHighG33RuntimeState>();
             }
 
-            if (!TryAdapt(prefabRoot, state))
+            if (!TryAdapt(prefabRoot, state, templateId))
             {
-                if (!_missingHierarchyWarningWritten)
+                if (MissingHierarchyWarnings.Add(templateId))
                 {
-                    _missingHierarchyWarningWritten = true;
                     MakeMagnifierGreatAgainPlugin.LogWarning(
-                        "Could not adapt the EpicAIO EXPS3 high-magnifier "
-                        + "prefab: ftc_riser, Unity G33, ScopePrefabCache, "
-                        + "or mod_aim_camera was not found.");
+                        "Could not adapt the EpicAIO " + pairLabel
+                        + " pair prefab: G33, donor sight, "
+                        + "ScopePrefabCache, or mod_aim_camera was not found.");
                 }
                 return;
             }
 
-            if (!_adaptedLogWritten)
+            if (AdaptedTemplateLogs.Add(templateId))
             {
-                _adaptedLogWritten = true;
                 MakeMagnifierGreatAgainPlugin.LogInfo(
-                    "Adapted EpicAIO's EXPS3 high-magnifier pair for the "
-                    + "separate MMGA G33 item: promoted Unity G33 out of "
-                    + "ftc_riser, disabled the riser, preserved "
+                    "Adapted EpicAIO's " + pairLabel
+                    + " pair for the separate MMGA G33 item: isolated the "
+                    + "G33 from the donor pair, disabled baked sight/riser "
+                    + "geometry where present, preserved "
                     + "the G33 aim bone, created its live mod_scope anchor, "
                     + "and suppressed the baked EpicAIO reticles.");
             }
         }
 
+        private static bool IsDonorPairTemplate(string templateId)
+        {
+            return string.Equals(
+                    templateId,
+                    EpicExps3HighPairTemplateId,
+                    StringComparison.OrdinalIgnoreCase)
+                || string.Equals(
+                    templateId,
+                    EpicUh1HighPairTemplateId,
+                    StringComparison.OrdinalIgnoreCase)
+                || string.Equals(
+                    templateId,
+                    EpicExps3LowPairTemplateId,
+                    StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string GetMmgaPairLabel(string templateId)
+        {
+            if (string.Equals(
+                templateId,
+                MakeMagnifierGreatAgainPlugin.EpicHighG33TemplateId,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return "EXPS3/FDE";
+            }
+
+            if (string.Equals(
+                templateId,
+                MakeMagnifierGreatAgainPlugin.EpicUh1HighG33TemplateId,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return "UH-1/black";
+            }
+
+            if (string.Equals(
+                templateId,
+                MakeMagnifierGreatAgainPlugin.EpicExps3LowG33TemplateId,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return "EXPS3 low/tan";
+            }
+
+            return null;
+        }
+
         private static bool TryAdapt(
             Transform prefabRoot,
-            EpicHighG33RuntimeState state)
+            EpicHighG33RuntimeState state,
+            string templateId)
         {
-            var riser = FindDescendantExact(prefabRoot, RiserName);
-            var unityG33 = FindDescendantExact(prefabRoot, UnityG33Name);
-            if (riser == null && state.Riser != null)
+            var isLowPair = string.Equals(
+                templateId,
+                MakeMagnifierGreatAgainPlugin.EpicExps3LowG33TemplateId,
+                StringComparison.OrdinalIgnoreCase);
+            var isUh1Pair = string.Equals(
+                templateId,
+                MakeMagnifierGreatAgainPlugin.EpicUh1HighG33TemplateId,
+                StringComparison.OrdinalIgnoreCase);
+
+            var riser = isLowPair
+                ? null
+                : FindDescendantExact(prefabRoot, RiserName)
+                    ?? FindDescendantExact(prefabRoot, UnityFtcRiserName);
+            var unityG33 = FindDescendantExact(
+                prefabRoot,
+                isLowPair ? G33BaseName : UnityG33Name);
+            if (!isLowPair && riser == null && state.Riser != null)
             {
                 riser = state.Riser;
             }
@@ -111,7 +178,7 @@ namespace MakeMagnifierGreatAgain
             {
                 unityG33 = state.UnityG33;
             }
-            if (riser == null || unityG33 == null)
+            if ((!isLowPair && riser == null) || unityG33 == null)
             {
                 return false;
             }
@@ -127,13 +194,36 @@ namespace MakeMagnifierGreatAgain
             }
 
             var g33Host = cache.transform;
-            var sourceAim = FindDescendantExact(riser, AimBoneName);
+            var sourceAim = riser != null
+                ? FindDescendantExact(riser, AimBoneName)
+                    // The UH-1 high pair stores its aim bone beside the riser,
+                    // sight, and Unity G33 beneath the pair root. The EXPS3
+                    // high pair stores the same bone inside ftc_riser.
+                    ?? FindDirectChildExact(riser.parent, AimBoneName)
+                // The low pair keeps mod_aim_camera beside its EXPS3 and G33.
+                : FindDirectChildExact(prefabRoot, AimBoneName);
             if (sourceAim == null && state.SourceAimBone != null)
             {
                 sourceAim = state.SourceAimBone;
             }
+            if (sourceAim == null)
+            {
+                sourceAim = FindDescendantExact(prefabRoot, AimBoneName);
+            }
 
             if (sourceAim == null)
+            {
+                return false;
+            }
+
+            var donorSight = isLowPair
+                ? FindDirectChildExact(prefabRoot, Exps3LowDonorSightName)
+                : FindDescendantExact(prefabRoot, Uh1DonorSightName);
+            if (donorSight == null && state.DonorSight != null)
+            {
+                donorSight = state.DonorSight;
+            }
+            if ((isLowPair || isUh1Pair) && donorSight == null)
             {
                 return false;
             }
@@ -142,13 +232,13 @@ namespace MakeMagnifierGreatAgain
                 riser,
                 unityG33,
                 cache,
-                sourceAim);
+                sourceAim,
+                donorSight);
             state.NormalizeMagnifierFieldOfView(
                 CalibratedUnityG33FieldOfView);
 
-            // The baked pair's aim transform lives under ftc_riser. Recreate
-            // the same empty bone under the logical G33 before hiding the
-            // complete raiser hierarchy.
+            // Recreate the pair's aim transform under the logical G33 before
+            // hiding its original sight/riser hierarchy.
             var runtimeAim = state.GetOrCreateRuntimeAim(g33Host);
             CopyWorldPose(sourceAim, runtimeAim, false);
             runtimeAim.name = AimBoneName;
@@ -156,24 +246,25 @@ namespace MakeMagnifierGreatAgain
             runtimeAim.gameObject.SetActive(true);
             sourceAim.name = EpicHighG33RuntimeState.HiddenAimBoneName;
 
-            // Unity G33 is also nested below ftc_riser in EpicAIO's asset.
-            // Promote the complete G33 subtree before the riser is disabled,
-            // retaining the bundle-authored world placement and all serialized
-            // ScopeModeInfo references to mode_000/mode_001.
-            state.PromoteUnityG33(g33Host, riser.parent);
+            // Promote the complete G33 subtree when necessary, retaining the
+            // bundle-authored world placement and all serialized ScopeModeInfo
+            // references to mode_000/mode_001.
+            state.PromoteUnityG33(
+                g33Host,
+                riser != null ? riser.parent : prefabRoot);
 
-            // Use the FTC riser's base position, not the baked raised EXPS3
-            // position. The 270-degree local X rotation is required for EFT to
-            // orient an attached sight correctly beneath this prefab root.
-            // Keep the slot immediately below ScopePrefabCache so MMGA's
-            // existing nested-sight discovery treats it like the custom G33.
+            // High pairs use the FTC riser's base position. The low pair has no
+            // riser, so its immediate EXPS3 child is the replacement anchor.
+            // The 270-degree local X rotation is required for EFT to orient an
+            // attached sight correctly beneath this prefab root.
+            var slotAnchor = riser ?? donorSight;
             var runtimeSlot = state.GetOrCreateRuntimeSlot(g33Host);
-            runtimeSlot.position = riser.position;
+            runtimeSlot.position = slotAnchor.position;
             runtimeSlot.localRotation = Quaternion.Euler(
                 ScopeSlotLocalEulerAngles);
             runtimeSlot.localScale = Vector3.one;
             runtimeSlot.name = ScopeSlotName;
-            runtimeSlot.gameObject.layer = riser.gameObject.layer;
+            runtimeSlot.gameObject.layer = slotAnchor.gameObject.layer;
             runtimeSlot.gameObject.SetActive(true);
 
             // EpicAIO's combined pair owns both a 1x CollimatorSight and a
@@ -185,7 +276,11 @@ namespace MakeMagnifierGreatAgain
             state.EnableAdaptedReticleTextureScale();
 
             g33Host.name = G33RuntimeRootName;
-            riser.gameObject.SetActive(false);
+            state.HideDonorGeometry();
+            if (riser != null)
+            {
+                riser.gameObject.SetActive(false);
+            }
             return true;
         }
 
@@ -284,6 +379,30 @@ namespace MakeMagnifierGreatAgain
             return null;
         }
 
+        private static Transform FindDirectChildExact(
+            Transform parent,
+            string name)
+        {
+            if (parent == null)
+            {
+                return null;
+            }
+
+            for (var index = 0; index < parent.childCount; index++)
+            {
+                var child = parent.GetChild(index);
+                if (string.Equals(
+                    child.name,
+                    name,
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    return child;
+                }
+            }
+
+            return null;
+        }
+
     }
 
     internal sealed class EpicHighG33RuntimeState : MonoBehaviour
@@ -303,6 +422,7 @@ namespace MakeMagnifierGreatAgain
         internal Transform UnityG33 { get; private set; }
         internal ScopePrefabCache G33Cache { get; private set; }
         internal Transform SourceAimBone { get; private set; }
+        internal Transform DonorSight { get; private set; }
 
         private sealed class DonorReticleState
         {
@@ -351,6 +471,7 @@ namespace MakeMagnifierGreatAgain
         private Quaternion _originalUnityG33LocalRotation;
         private Vector3 _originalUnityG33LocalScale;
         private bool _originalRiserActive;
+        private bool _originalDonorSightActive;
         private bool _originalHasCollimators;
         private DonorReticleState[] _donorReticles;
         private ScopeCameraState[] _scopeCameras;
@@ -376,7 +497,8 @@ namespace MakeMagnifierGreatAgain
             Transform riser,
             Transform unityG33,
             ScopePrefabCache cache,
-            Transform sourceAimBone)
+            Transform sourceAimBone,
+            Transform donorSight)
         {
             if (_captured)
             {
@@ -387,16 +509,31 @@ namespace MakeMagnifierGreatAgain
             UnityG33 = unityG33;
             G33Cache = cache;
             SourceAimBone = sourceAimBone;
+            DonorSight = donorSight;
             _originalG33HostName = cache.transform.name;
             _originalUnityG33Parent = unityG33.parent;
             _originalUnityG33SiblingIndex = unityG33.GetSiblingIndex();
             _originalUnityG33LocalPosition = unityG33.localPosition;
             _originalUnityG33LocalRotation = unityG33.localRotation;
             _originalUnityG33LocalScale = unityG33.localScale;
-            _originalRiserActive = riser.gameObject.activeSelf;
+            _originalRiserActive = riser != null
+                && riser.gameObject.activeSelf;
+            _originalDonorSightActive = donorSight != null
+                && donorSight.gameObject.activeSelf;
             CaptureDonorReticles(cache);
             CaptureScopeCameras(cache);
             _captured = true;
+        }
+
+        internal void HideDonorGeometry()
+        {
+            // In the EXPS3 prefab the baked sight is beneath ftc_riser and is
+            // hidden with it. In the UH-1 prefab it is a sibling, so it must be
+            // disabled independently.
+            if (DonorSight != null)
+            {
+                DonorSight.gameObject.SetActive(false);
+            }
         }
 
         private void CaptureScopeCameras(ScopePrefabCache cache)
@@ -1052,6 +1189,10 @@ namespace MakeMagnifierGreatAgain
             if (Riser != null)
             {
                 Riser.gameObject.SetActive(_originalRiserActive);
+            }
+            if (DonorSight != null)
+            {
+                DonorSight.gameObject.SetActive(_originalDonorSightActive);
             }
             if (_runtimeAim != null)
             {
