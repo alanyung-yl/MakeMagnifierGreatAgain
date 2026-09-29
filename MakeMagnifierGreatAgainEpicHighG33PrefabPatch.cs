@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using EFT;
+using EFT.CameraControl;
 using EFT.InventoryLogic;
 using HarmonyLib;
 using UnityEngine;
@@ -180,6 +182,7 @@ namespace MakeMagnifierGreatAgain
             // sources explicitly. MMGA will project the attached child sight's
             // collimator through the G33 instead.
             state.SuppressDonorReticles();
+            state.EnableAdaptedReticleTextureScale();
 
             g33Host.name = G33RuntimeRootName;
             riser.gameObject.SetActive(false);
@@ -285,12 +288,16 @@ namespace MakeMagnifierGreatAgain
 
     internal sealed class EpicHighG33RuntimeState : MonoBehaviour
     {
+        internal const float CenteredReticleArtworkScale = 0.5f;
+        private const float ReticleTextureSupersampling = 4f;
+        private const int MaximumReticleTextureDimension = 1024;
         internal const string HiddenAimBoneName =
             "mmga_hidden_epicaio_mod_aim_camera";
         private const string InactiveRuntimeAimName =
             "mmga_runtime_mod_aim_camera";
         private const string InactiveRuntimeSlotName =
             "mmga_runtime_mod_scope";
+        private const string MarkTexturePropertyName = "_MarkTex";
 
         internal Transform Riser { get; private set; }
         internal Transform UnityG33 { get; private set; }
@@ -317,6 +324,24 @@ namespace MakeMagnifierGreatAgain
             internal float FieldOfView;
         }
 
+        private sealed class ReticleRendererOverrideState
+        {
+            internal Renderer Renderer;
+            internal Material[] OriginalMaterials;
+        }
+
+        private sealed class ScaledReticleMaterialState
+        {
+            internal Material Source;
+            internal Material Scaled;
+        }
+
+        private sealed class ScaledReticleTextureState
+        {
+            internal Texture Source;
+            internal Texture2D Scaled;
+        }
+
         private Transform _runtimeAim;
         private Transform _runtimeSlot;
         private string _originalG33HostName;
@@ -329,8 +354,23 @@ namespace MakeMagnifierGreatAgain
         private bool _originalHasCollimators;
         private DonorReticleState[] _donorReticles;
         private ScopeCameraState[] _scopeCameras;
+        private readonly List<ReticleRendererOverrideState>
+            _activeReticleOverrides =
+                new List<ReticleRendererOverrideState>();
+        private readonly Dictionary<int, ScaledReticleMaterialState>
+            _scaledReticleMaterials =
+                new Dictionary<int, ScaledReticleMaterialState>();
+        private readonly Dictionary<int, ScaledReticleTextureState>
+            _scaledReticleTextures =
+                new Dictionary<int, ScaledReticleTextureState>();
+        private readonly HashSet<int> _seenReticleRenderers =
+            new HashSet<int>();
         private bool _fieldOfViewLogWritten;
+        private bool _reticleTextureScaleLogWritten;
+        private bool _adapted;
         private bool _captured;
+
+        internal bool IsAdapted => _adapted;
 
         internal void Capture(
             Transform riser,
@@ -400,6 +440,416 @@ namespace MakeMagnifierGreatAgain
                     + "; the child reticle keeps its native projection and "
                     + "point of aim.");
             }
+        }
+
+        internal void EnableAdaptedReticleTextureScale()
+        {
+            _adapted = true;
+        }
+
+        internal static bool IsAdaptedUnityG33(ScopePrefabCache g33Cache)
+        {
+            if (g33Cache == null)
+            {
+                return false;
+            }
+
+            var runtime = g33Cache.GetComponentInParent<
+                EpicHighG33RuntimeState>();
+            return runtime != null && runtime.IsAdapted;
+        }
+
+        internal static Texture2D CreateCenteredScaledReticleTexture(
+            Texture markTexture)
+        {
+            if (markTexture == null)
+            {
+                return null;
+            }
+
+            var sourceWidth = Mathf.Max(1, markTexture.width);
+            var sourceHeight = Mathf.Max(1, markTexture.height);
+            var maximumSourceDimension = Mathf.Max(
+                sourceWidth,
+                sourceHeight);
+            var outputScale = Mathf.Clamp(
+                Mathf.Min(
+                    ReticleTextureSupersampling,
+                    MaximumReticleTextureDimension
+                        / (float)maximumSourceDimension),
+                1f,
+                ReticleTextureSupersampling);
+            var width = Mathf.Max(
+                1,
+                Mathf.RoundToInt(sourceWidth * outputScale));
+            var height = Mathf.Max(
+                1,
+                Mathf.RoundToInt(sourceHeight * outputScale));
+            var temporary = RenderTexture.GetTemporary(
+                sourceWidth,
+                sourceHeight,
+                0,
+                RenderTextureFormat.ARGB32,
+                RenderTextureReadWrite.Linear);
+            var previous = RenderTexture.active;
+            Texture2D readable = null;
+            Texture2D scaled = null;
+            try
+            {
+                Graphics.Blit(markTexture, temporary);
+                RenderTexture.active = temporary;
+                readable = new Texture2D(
+                    sourceWidth,
+                    sourceHeight,
+                    TextureFormat.RGBA32,
+                    false,
+                    true);
+                readable.ReadPixels(
+                    new Rect(0f, 0f, sourceWidth, sourceHeight),
+                    0,
+                    0,
+                    false);
+                readable.Apply(false, false);
+
+                var scaledPixels = new Color32[width * height];
+                var inverseScale = 1f / CenteredReticleArtworkScale;
+                for (var y = 0; y < height; y++)
+                {
+                    var destinationV = (y + 0.5f) / height;
+                    var sourceV = 0.5f
+                        + (destinationV - 0.5f) * inverseScale;
+                    if (sourceV < 0f || sourceV > 1f)
+                    {
+                        continue;
+                    }
+
+                    var row = y * width;
+                    for (var x = 0; x < width; x++)
+                    {
+                        var destinationU = (x + 0.5f) / width;
+                        var sourceU = 0.5f
+                            + (destinationU - 0.5f) * inverseScale;
+                        if (sourceU < 0f || sourceU > 1f)
+                        {
+                            continue;
+                        }
+
+                        scaledPixels[row + x] = (Color32)readable
+                            .GetPixelBilinear(sourceU, sourceV);
+                    }
+                }
+
+                var mipChain = markTexture.mipmapCount > 1;
+                scaled = new Texture2D(
+                    width,
+                    height,
+                    TextureFormat.RGBA32,
+                    mipChain,
+                    true)
+                {
+                    name = markTexture.name
+                        + "_MMGA_UnityG33_CenteredHalfScale_"
+                        + width + "x" + height,
+                    hideFlags = HideFlags.HideAndDontSave,
+                    filterMode = FilterMode.Bilinear,
+                    wrapMode = markTexture.wrapMode,
+                    anisoLevel = markTexture.anisoLevel
+                };
+                scaled.SetPixels32(scaledPixels);
+                scaled.Apply(mipChain, false);
+                MakeMagnifierGreatAgainPlugin.LogInfo(
+                    "Created a supersampled centered Unity G33 reticle copy "
+                    + "for '" + markTexture.name + "': "
+                    + sourceWidth + "x" + sourceHeight + " -> "
+                    + width + "x" + height + ", artwork scale "
+                    + CenteredReticleArtworkScale.ToString("0.###") + ".");
+                return scaled;
+            }
+            catch (Exception exception)
+            {
+                if (scaled != null)
+                {
+                    UnityEngine.Object.Destroy(scaled);
+                }
+                MakeMagnifierGreatAgainPlugin.LogWarning(
+                    "Could not create the centered Unity G33 reticle texture "
+                    + "copy for '" + markTexture.name + "'; retaining the "
+                    + "native mark. " + exception.Message);
+                return null;
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                if (readable != null)
+                {
+                    UnityEngine.Object.Destroy(readable);
+                }
+                RenderTexture.ReleaseTemporary(temporary);
+            }
+        }
+
+        private void OnEnable()
+        {
+            Camera.onPreCull -= OnCameraPreCull;
+            Camera.onPostRender -= OnCameraPostRender;
+            Camera.onPreCull += OnCameraPreCull;
+            Camera.onPostRender += OnCameraPostRender;
+        }
+
+        private void OnDisable()
+        {
+            Camera.onPreCull -= OnCameraPreCull;
+            Camera.onPostRender -= OnCameraPostRender;
+            RestoreReticleMaterials();
+        }
+
+        private void OnDestroy()
+        {
+            Camera.onPreCull -= OnCameraPreCull;
+            Camera.onPostRender -= OnCameraPostRender;
+            RestoreReticleMaterials();
+            DestroyScaledReticleResources();
+        }
+
+        private void OnCameraPreCull(Camera camera)
+        {
+            RestoreReticleMaterials();
+            if (!_adapted
+                || camera == null
+                || _runtimeSlot == null
+                || G33Cache == null)
+            {
+                return;
+            }
+
+            var cameraManager = CameraManager.Instance;
+            if (cameraManager == null
+                || !ReferenceEquals(
+                    cameraManager.OpticCameraManager.Camera,
+                    camera))
+            {
+                return;
+            }
+
+            var currentOptic =
+                cameraManager.OpticCameraManager.CurrentOpticSight;
+            if (currentOptic == null
+                || (!ReferenceEquals(currentOptic.transform, G33Cache.transform)
+                    && !currentOptic.transform.IsChildOf(G33Cache.transform)))
+            {
+                return;
+            }
+
+            _seenReticleRenderers.Clear();
+            var collimators = _runtimeSlot.GetComponentsInChildren<
+                CollimatorSight>(true);
+            foreach (var collimator in collimators)
+            {
+                var renderer = collimator != null
+                    ? collimator.CollimatorMeshRenderer
+                    : null;
+                if (renderer == null
+                    || !_seenReticleRenderers.Add(renderer.GetInstanceID()))
+                {
+                    continue;
+                }
+
+                ApplyReticleMaterialOverride(renderer);
+            }
+
+            if (_activeReticleOverrides.Count > 0
+                && !_reticleTextureScaleLogWritten)
+            {
+                _reticleTextureScaleLogWritten = true;
+                MakeMagnifierGreatAgainPlugin.LogInfo(
+                    "Scaled the adapted Unity G33 3x reticle artwork to "
+                    + (CenteredReticleArtworkScale * 100f).ToString("0.#")
+                    + "% around UV center 0.5 while retaining native "
+                    + "_MarkScale, _MarkShift, and the normal 1x material.");
+            }
+        }
+
+        private void OnCameraPostRender(Camera camera)
+        {
+            if (camera == null)
+            {
+                return;
+            }
+
+            var cameraManager = CameraManager.Instance;
+            if (cameraManager != null
+                && ReferenceEquals(
+                    cameraManager.OpticCameraManager.Camera,
+                    camera))
+            {
+                RestoreReticleMaterials();
+            }
+        }
+
+        private void ApplyReticleMaterialOverride(Renderer renderer)
+        {
+            var originalMaterials = renderer.sharedMaterials;
+            if (originalMaterials == null || originalMaterials.Length == 0)
+            {
+                return;
+            }
+
+            var scaledMaterials = (Material[])originalMaterials.Clone();
+            var changed = false;
+            for (var index = 0; index < originalMaterials.Length; index++)
+            {
+                var scaled = GetScaledReticleMaterial(
+                    originalMaterials[index]);
+                if (scaled == null)
+                {
+                    continue;
+                }
+
+                scaledMaterials[index] = scaled;
+                changed = true;
+            }
+
+            if (!changed)
+            {
+                return;
+            }
+
+            _activeReticleOverrides.Add(
+                new ReticleRendererOverrideState
+                {
+                    Renderer = renderer,
+                    OriginalMaterials = originalMaterials
+                });
+            renderer.sharedMaterials = scaledMaterials;
+        }
+
+        private Material GetScaledReticleMaterial(Material source)
+        {
+            if (source == null
+                || !source.HasProperty(MarkTexturePropertyName))
+            {
+                return null;
+            }
+
+            var sourceMark = source.GetTexture(MarkTexturePropertyName);
+            var scaledMark = GetOrCreateScaledReticleTexture(sourceMark);
+            if (scaledMark == null)
+            {
+                return null;
+            }
+
+            var sourceId = source.GetInstanceID();
+            ScaledReticleMaterialState state;
+            if (!_scaledReticleMaterials.TryGetValue(sourceId, out state)
+                || state == null
+                || state.Source != source
+                || state.Scaled == null
+                || state.Scaled.shader != source.shader)
+            {
+                if (state != null && state.Scaled != null)
+                {
+                    UnityEngine.Object.Destroy(state.Scaled);
+                }
+
+                state = new ScaledReticleMaterialState
+                {
+                    Source = source,
+                    Scaled = new Material(source)
+                    {
+                        name = source.name
+                            + " (MMGA Unity G33 centered reticle)",
+                        hideFlags = HideFlags.HideAndDontSave
+                    }
+                };
+                _scaledReticleMaterials[sourceId] = state;
+            }
+            else
+            {
+                state.Scaled.CopyPropertiesFromMaterial(source);
+            }
+
+            state.Scaled.SetTexture(
+                MarkTexturePropertyName,
+                scaledMark);
+            return state.Scaled;
+        }
+
+        private Texture2D GetOrCreateScaledReticleTexture(Texture source)
+        {
+            if (source == null)
+            {
+                return null;
+            }
+
+            var sourceId = source.GetInstanceID();
+            ScaledReticleTextureState state;
+            if (_scaledReticleTextures.TryGetValue(sourceId, out state)
+                && state != null
+                && state.Source == source
+                && state.Scaled != null)
+            {
+                return state.Scaled;
+            }
+
+            if (state != null && state.Scaled != null)
+            {
+                UnityEngine.Object.Destroy(state.Scaled);
+            }
+
+            var scaled = CreateCenteredScaledReticleTexture(source);
+            if (scaled == null)
+            {
+                return null;
+            }
+
+            _scaledReticleTextures[sourceId] =
+                new ScaledReticleTextureState
+                {
+                    Source = source,
+                    Scaled = scaled
+                };
+            return scaled;
+        }
+
+        private void RestoreReticleMaterials()
+        {
+            for (var index = _activeReticleOverrides.Count - 1;
+                index >= 0;
+                index--)
+            {
+                var state = _activeReticleOverrides[index];
+                if (state != null
+                    && state.Renderer != null
+                    && state.OriginalMaterials != null)
+                {
+                    state.Renderer.sharedMaterials = state.OriginalMaterials;
+                }
+            }
+
+            _activeReticleOverrides.Clear();
+        }
+
+        private void DestroyScaledReticleResources()
+        {
+            foreach (var pair in _scaledReticleMaterials)
+            {
+                var state = pair.Value;
+                if (state != null && state.Scaled != null)
+                {
+                    UnityEngine.Object.Destroy(state.Scaled);
+                }
+            }
+            _scaledReticleMaterials.Clear();
+
+            foreach (var pair in _scaledReticleTextures)
+            {
+                var state = pair.Value;
+                if (state != null && state.Scaled != null)
+                {
+                    UnityEngine.Object.Destroy(state.Scaled);
+                }
+            }
+            _scaledReticleTextures.Clear();
         }
 
         private void CaptureDonorReticles(ScopePrefabCache cache)
@@ -575,6 +1025,9 @@ namespace MakeMagnifierGreatAgain
             {
                 return;
             }
+
+            _adapted = false;
+            RestoreReticleMaterials();
 
             if (G33Cache != null)
             {

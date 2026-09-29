@@ -1359,6 +1359,29 @@ namespace MakeMagnifierGreatAgain
                     CorrectMarkOrientationProperty,
                     0f);
             }
+
+            if (EpicHighG33RuntimeState.IsAdaptedUnityG33(
+                    state.ChildCache)
+                && state.ProjectedCollimatorMaterial.HasProperty("_MarkTex"))
+            {
+                var sourceMark = state.ProjectedCollimatorMaterial.GetTexture(
+                    "_MarkTex");
+                var centeredMark =
+                    EpicHighG33RuntimeState
+                        .CreateCenteredScaledReticleTexture(sourceMark);
+                if (centeredMark != null)
+                {
+                    if (state.ProjectedCollimatorMarkTexture != null)
+                    {
+                        UnityEngine.Object.Destroy(
+                            state.ProjectedCollimatorMarkTexture);
+                    }
+                    state.ProjectedCollimatorMarkTexture = centeredMark;
+                    state.ProjectedCollimatorMaterial.SetTexture(
+                        "_MarkTex",
+                        centeredMark);
+                }
+            }
         }
 
         private static Texture2D CreateCenteredVerticalMarkFlip(
