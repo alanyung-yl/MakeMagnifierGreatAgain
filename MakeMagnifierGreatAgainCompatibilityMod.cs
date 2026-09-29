@@ -25,7 +25,16 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
     private const string EpicHighG33TemplateId = "31d49a6fcf9e8c1864d7e420";
     private const string SkeetIrTemplateId = "31d49a6fcf9e8c1864d7e410";
     private const string VanillaHhsTemplateId = "5c07dd120db834001c39092d";
+    private const string SigEcho1TemplateId = "6478641c19d732620e045e17";
+    private const string UnvDlocIrdTemplateId = "5a1ead28fcdbcb001912fa9f";
     private const string FrontScopeSlotName = "mod_scope";
+
+    // A universal rail carrier is normally present in many weapon/receiver
+    // rail filters. Platform bridges such as the M14 DCSB and ASh-12 carry
+    // handle appear in only a small family of filters even when that family
+    // has colour or calibre variants. Keep those weapon-family parts out of
+    // MMGA's child slots. Explicit trusted-riser IDs bypass this heuristic.
+    private const int MinimumGeneralRailHostCount = 9;
 
     // Stable EFT item categories, not item whitelist entries.
     private const string CollimatorCategoryId = "55818ad54bdc2ddc698b4569";
@@ -47,6 +56,27 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
     private static readonly HashSet<MongoId> ExplicitlyExcludedMountIds =
     [
         "5649a2464bdc2d91118b45a8", // NcSTAR MPR45 45-degree backup mount
+    ];
+
+    // EFT models weapon-mounted night/thermal sights as ordinary optics; only
+    // helmet devices inherit the NightVision/ThermalVision categories. These
+    // stable database/prefab-name tokens cover the weapon optics as well.
+    private static readonly string[] VisionDeviceNameTokens =
+    [
+        "thermal",
+        "nightvision",
+        "night_vision",
+        "nvg_",
+        "reap-ir",
+        "flir",
+        "echo1",
+        "t12w",
+        "vulcan",
+        "zeus",
+        "digisight",
+        "ir-hunter",
+        "nspu",
+        "1pn93",
     ];
 
     private const double OnePowerTolerance = 0.001;
@@ -117,7 +147,6 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             .Select(item => item.Id)
             .ToHashSet();
 
-        MongoId mountCategoryId = MountCategoryId;
         var trustedRiserIds = LoadTrustedRiserIds(logger);
         var directRailAnchors = DirectRailAnchorIds
             .Where(templateTable.Items.ContainsKey)
@@ -131,48 +160,61 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             .Where(item =>
                 !item.Id.Equals(g33Id)
                 && !item.Id.Equals(epicHighG33Id))
-            .SelectMany(GetScopeFilters)
-            .Where(filter => filter.Filter?.Overlaps(directRailAnchors) == true)
+            .SelectMany(item => GetScopeFilters(item)
+                .Select(filter => (Owner: item, Filter: filter)))
+            .Where(entry =>
+                entry.Filter.Filter?.Overlaps(directRailAnchors) == true)
             .ToList();
 
         var railAcceptedItems = sightRailFilters
-            .SelectMany(filter => filter.Filter ?? [])
+            .SelectMany(entry => entry.Filter.Filter ?? [])
+            .ToHashSet();
+
+        var railHostsByAcceptedItem = BuildRailHostIndex(sightRailFilters);
+        var platformBoundCarrierIds = railAcceptedItems
+            .Where(id =>
+                templateTable.Items.TryGetValue(id, out var item)
+                && IsScopeCarrier(item)
+                && !trustedRiserIds.Contains(id.ToString())
+                && IsPlatformBoundCarrier(id, railHostsByAcceptedItem))
             .ToHashSet();
 
         var onePowerOptics = onePowerCandidates
             .Where(railAcceptedItems.Contains)
             .ToHashSet();
 
-        var railMounts = railAcceptedItems
+        var g33CarrierCandidates = railAcceptedItems
+            .Concat(templateTable.Items.Values
+                .Where(item => trustedRiserIds.Contains(item.Id.ToString()))
+                .Select(item => item.Id))
+            .ToHashSet();
+
+        // A G33 may directly receive a pure 1x sight, or a rail-facing
+        // carrier that has at least one recursive route to a pure 1x sight.
+        // Mixed carriers remain available; their magnified branches are
+        // closed with ConflictingItems below instead of rejecting the carrier.
+        var g33Carriers = g33CarrierCandidates
             .Where(id =>
                 templateTable.Items.TryGetValue(id, out var item)
-                && item.Type == "Item"
-                && item.Parent.Equals(mountCategoryId)
+                && IsScopeCarrier(item)
+                && !platformBoundCarrierIds.Contains(id)
                 && !ExplicitlyExcludedMountIds.Contains(id)
-                && (
-                    trustedRiserIds.Contains(id.ToString())
-                    || (
-                        HasOnePowerDescendant(
-                            id,
-                            templateTable,
-                            onePowerCandidates,
-                            new HashSet<MongoId>()
-                        )
-                        && !HasMagnifiedDescendant(
-                            id,
-                            templateTable,
-                            new HashSet<MongoId>()
-                        )
-                    )
-                )
+                && !HasExcludedMountWording(item)
+                && HasOnePowerDescendant(
+                    id,
+                    templateTable,
+                    onePowerCandidates,
+                    platformBoundCarrierIds,
+                    new HashSet<MongoId>())
             )
             .ToHashSet();
 
         var g33Discovered = onePowerOptics
-            .Concat(railMounts)
+            .Concat(g33Carriers)
             .Where(id =>
                 !id.Equals(g33Id)
-                && !id.Equals(epicHighG33Id))
+                && !id.Equals(epicHighG33Id)
+                && !id.Equals(skeetIrId))
             .ToHashSet();
 
         targetFilter.Filter ??= [];
@@ -190,9 +232,9 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             .ToHashSet();
 
         // Skeet is the rail-facing outer clip-on. Its direct child can be any
-        // ordinary rail optic (including magnified scopes) or a rail mount
-        // that eventually carries one. NV and thermal devices are rejected at
-        // the Skeet root, so they also cannot enter through a nested mount.
+        // ordinary rail optic (including magnified scopes) or a compatible
+        // rail carrier. NV/thermal sights are rejected directly and through
+        // every recursive carrier route.
         var skeetSightIds = railAcceptedItems
             .Where(id =>
                 templateTable.Items.TryGetValue(id, out var item)
@@ -201,27 +243,19 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             )
             .ToHashSet();
 
-        var skeetMountIds = railAcceptedItems
+        var skeetCarrierIds = railAcceptedItems
             .Where(id =>
                 templateTable.Items.TryGetValue(id, out var item)
-                && item.Type == "Item"
-                && item.Parent.Equals(mountCategoryId)
-                && item.Name?.StartsWith(
-                    "mount_all_",
-                    StringComparison.OrdinalIgnoreCase
-                ) == true
-                && !ExplicitlyExcludedMountIds.Contains(id)
-                && HasAllowedSkeetSightDescendant(
-                    id,
+                && IsSkeetCarrierEligible(
+                    item,
                     templateTable,
                     excludedVisionDeviceIds,
-                    new HashSet<MongoId>()
-                )
+                    platformBoundCarrierIds)
             )
             .ToHashSet();
 
         var skeetDiscovered = skeetSightIds
-            .Concat(skeetMountIds)
+            .Concat(skeetCarrierIds)
             .Where(id => !id.Equals(skeetIrId))
             .ToHashSet();
         skeetDiscovered.Add(g33Id);
@@ -234,40 +268,91 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             skeetIrTargetFilter.Filter.UnionWith(skeetDiscovered);
         }
 
-        // Trusted risers retain their normal global child filters. Prevent a
-        // magnified optic from coexisting with the G33 anywhere in the same
-        // weapon assembly, closing the otherwise unavoidable nested loophole.
-        var magnifiedSightIds = templateTable.Items.Values
-            .Where(IsMagnifiedSight)
+        // Carrier child filters remain owned by EFT/other mods. Conflicts are
+        // therefore the context-sensitive guardrails for nested branches.
+        // G33 accepts only pure 1x sights, even when the incompatible sight is
+        // reachable through one or more mixed risers/scope mounts.
+        var nonOnePowerSightIds = templateTable.Items.Values
+            .Where(item => IsSight(item)
+                && !onePowerCandidates.Contains(item.Id))
             .Select(item => item.Id)
             .Where(id =>
                 !id.Equals(g33Id)
-                && !id.Equals(epicHighG33Id))
+                && !id.Equals(epicHighG33Id)
+                // Skeet is the valid outer parent of either G33. Putting it
+                // in a G33 conflict list blocks Skeet -> G33 as well as the
+                // reverse because EFT evaluates conflicts assembly-wide.
+                && !id.Equals(skeetIrId))
             .ToHashSet();
 
-        // Rail-facing mounts that failed the safe-mount test would otherwise
-        // remain installable through a trusted riser and lead to a dead-end
-        // slot. Conflict them at the G33 level along with magnified sights.
-        var rejectedRailMountIds = railAcceptedItems
-            .Where(id =>
-                templateTable.Items.TryGetValue(id, out var item)
-                && item.Type == "Item"
-                && item.Parent.Equals(mountCategoryId)
-                && !railMounts.Contains(id)
-            )
-            .ToHashSet();
+        var g33NestedCarrierConflicts = new HashSet<MongoId>();
+        foreach (var carrierId in g33Carriers)
+        {
+            CollectNestedG33CarrierConflicts(
+                carrierId,
+                templateTable,
+                onePowerCandidates,
+                platformBoundCarrierIds,
+                g33NestedCarrierConflicts,
+                new HashSet<MongoId>());
+        }
+        var skeetNestedCarrierConflicts = new HashSet<MongoId>();
+        foreach (var carrierId in skeetCarrierIds)
+        {
+            CollectNestedSkeetCarrierConflicts(
+                carrierId,
+                templateTable,
+                excludedVisionDeviceIds,
+                platformBoundCarrierIds,
+                skeetNestedCarrierConflicts,
+                new HashSet<MongoId>());
+        }
+        // A Skeet may sit on a riser, but another Skeet cannot be installed
+        // beneath that first Skeet through the riser's globally-owned filter.
+        skeetNestedCarrierConflicts.Add(skeetIrId);
 
         g33Template.Properties!.ConflictingItems ??= [];
-        g33Template.Properties.ConflictingItems.UnionWith(magnifiedSightIds);
-        g33Template.Properties.ConflictingItems.UnionWith(rejectedRailMountIds);
+        g33Template.Properties.ConflictingItems.UnionWith(nonOnePowerSightIds);
+        g33Template.Properties.ConflictingItems.UnionWith(g33NestedCarrierConflicts);
+        g33Template.Properties.ConflictingItems.Remove(skeetIrId);
         epicHighG33Template.Properties!.ConflictingItems ??= [];
-        epicHighG33Template.Properties.ConflictingItems.UnionWith(magnifiedSightIds);
-        epicHighG33Template.Properties.ConflictingItems.UnionWith(rejectedRailMountIds);
+        epicHighG33Template.Properties.ConflictingItems.UnionWith(nonOnePowerSightIds);
+        epicHighG33Template.Properties.ConflictingItems.UnionWith(g33NestedCarrierConflicts);
+        epicHighG33Template.Properties.ConflictingItems.Remove(skeetIrId);
 
         if (skeetIrTemplate?.Properties != null)
         {
             skeetIrTemplate.Properties.ConflictingItems ??= [];
             skeetIrTemplate.Properties.ConflictingItems.UnionWith(excludedVisionDeviceIds);
+            skeetIrTemplate.Properties.ConflictingItems.UnionWith(
+                skeetNestedCarrierConflicts);
+        }
+
+        // WTT-style global slot registration cannot express "only while this
+        // riser is nested". Add both G33 variants to every safe rail-facing
+        // mount slot; the G33 conflicts above police incompatible branches.
+        var railMountFilters = 0;
+        var railMountCustomAdded = 0;
+        var railMountEpicAdded = 0;
+        foreach (var (owner, filter) in sightRailFilters)
+        {
+            if (!IsScopeCarrier(owner)
+                || ExplicitlyExcludedMountIds.Contains(owner.Id)
+                || HasExcludedMountWording(owner))
+            {
+                continue;
+            }
+
+            filter.Filter ??= [];
+            railMountFilters++;
+            if (filter.Filter.Add(g33Id))
+            {
+                railMountCustomAdded++;
+            }
+            if (filter.Filter.Add(epicHighG33Id))
+            {
+                railMountEpicAdded++;
+            }
         }
 
         var parentSlotResult = AddToHhsCompatibleParentSlots(
@@ -279,16 +364,47 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             epicHighG33Id
         );
 
+        ValidateRootFilters(
+            templateTable,
+            g33Template,
+            epicHighG33Template,
+            skeetIrTemplate,
+            targetFilter,
+            epicHighTargetFilter,
+            skeetIrTargetFilter,
+            onePowerCandidates,
+            excludedVisionDeviceIds,
+            platformBoundCarrierIds);
+
+        var mixedG33CarrierCount = g33Carriers.Count(id =>
+            HasMagnifiedDescendant(
+                id,
+                templateTable,
+                new HashSet<MongoId>()));
+        var integratedIronCarrierCount = g33Carriers.Count(id =>
+            templateTable.Items.TryGetValue(id, out var item)
+                && string.Equals(
+                    item.Properties?.SightModType,
+                    "iron",
+                    StringComparison.OrdinalIgnoreCase));
+
         logger.Success(
             $"MakeMagnifierGreatAgain: discovered {onePowerOptics.Count} pure 1x optic(s) "
-                + $"and {railMounts.Count} sight-rail mount(s); "
+                + $"and {g33Carriers.Count} G33-compatible sight carrier(s); "
                 + $"both G33 mod_scope filters now contain {g33Discovered.Count} item(s). "
                 + (skeetIrTargetFilter != null
                     ? $"The Skeet-IR filter contains {skeetSightIds.Count} sight(s), "
-                        + $"{skeetMountIds.Count} mount(s), and both G33 variants. "
+                        + $"{skeetCarrierIds.Count} carrier(s), and both G33 variants. "
                     : string.Empty)
-                + $"Added {magnifiedSightIds.Count} magnified-sight and "
-                + $"{rejectedRailMountIds.Count} rejected-mount conflict(s). "
+                + $"Added {nonOnePowerSightIds.Count} non-1x-sight, "
+                + $"{g33NestedCarrierConflicts.Count} G33 nested-carrier, and "
+                + $"{skeetNestedCarrierConflicts.Count} Skeet nested-carrier conflict(s). "
+                + $"Whitelisted both G33 variants in {railMountFilters} rail-facing mount filter(s) "
+                + $"(new: {railMountCustomAdded}/{railMountEpicAdded}). "
+                + $"Retained {mixedG33CarrierCount} mixed 1x/magnified carrier(s) and "
+                + $"{integratedIronCarrierCount} integrated-iron carrier(s). "
+                + $"Excluded {platformBoundCarrierIds.Count} platform-bound carrier(s) "
+                + $"seen on fewer than {MinimumGeneralRailHostCount} rail host(s). "
                 + $"Verified {parentSlotResult.Matching} HHS-compatible parent filter(s); "
                 + $"added the custom-bundle G33 to {parentSlotResult.Added} and "
                 + $"the EpicAIO high clone to {epicHighParentSlotResult.Added}."
@@ -299,7 +415,123 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
                 + string.Join(", ", g33Discovered.OrderBy(id => id.ToString()))
         );
 
+        logger.Debug(
+            "MakeMagnifierGreatAgain platform-bound carrier exclusions: "
+                + string.Join(", ", platformBoundCarrierIds
+                    .OrderBy(id => id.ToString())
+                    .Select(id =>
+                    {
+                        var hostCount = railHostsByAcceptedItem.TryGetValue(
+                            id,
+                            out var hosts)
+                            ? hosts.Count
+                            : 0;
+                        var name = templateTable.Items.TryGetValue(id, out var item)
+                            ? item.Name
+                            : "missing";
+                        return $"{id} ({name}; hosts={hostCount})";
+                    }))
+        );
+
         return Task.CompletedTask;
+    }
+
+    private static void ValidateRootFilters(
+        TemplateTable templateTable,
+        TemplateItem g33Template,
+        TemplateItem epicHighG33Template,
+        TemplateItem? skeetTemplate,
+        SlotFilter g33Filter,
+        SlotFilter epicHighG33Filter,
+        SlotFilter? skeetFilter,
+        HashSet<MongoId> onePowerOptics,
+        HashSet<MongoId> excludedVisionDeviceIds,
+        HashSet<MongoId> platformBoundCarrierIds)
+    {
+        ValidateG33RootFilter(
+            "custom-bundle G33",
+            templateTable,
+            g33Filter,
+            onePowerOptics,
+            platformBoundCarrierIds);
+        ValidateG33RootFilter(
+            "EpicAIO G33",
+            templateTable,
+            epicHighG33Filter,
+            onePowerOptics,
+            platformBoundCarrierIds);
+
+        if (skeetFilter?.Filter == null)
+        {
+            return;
+        }
+
+        MongoId g33Id = G33TemplateId;
+        MongoId epicHighG33Id = EpicHighG33TemplateId;
+        MongoId skeetId = SkeetIrTemplateId;
+        var hierarchyIsInvalid = !skeetFilter.Filter.Contains(g33Id)
+            || !skeetFilter.Filter.Contains(epicHighG33Id)
+            || g33Filter.Filter?.Contains(skeetId) == true
+            || epicHighG33Filter.Filter?.Contains(skeetId) == true
+            || g33Template.Properties?.ConflictingItems?.Contains(skeetId) == true
+            || epicHighG33Template.Properties?.ConflictingItems?.Contains(skeetId) == true
+            || skeetTemplate?.Properties?.ConflictingItems?.Contains(g33Id) == true
+            || skeetTemplate?.Properties?.ConflictingItems?.Contains(epicHighG33Id) == true;
+        if (hierarchyIsInvalid)
+        {
+            throw new InvalidOperationException(
+                "MakeMagnifierGreatAgain: directional hierarchy validation failed; expected Skeet -> either G33 -> 1x sight.");
+        }
+
+        var invalidSkeetIds = skeetFilter.Filter.Where(id =>
+            excludedVisionDeviceIds.Contains(id)
+            || (templateTable.Items.TryGetValue(id, out var item)
+                && IsScopeCarrier(item)
+                && (platformBoundCarrierIds.Contains(id)
+                    || ExplicitlyExcludedMountIds.Contains(id)
+                    || HasExcludedMountWording(item)
+                    || HasDisqualifyingTacticalSlot(item, templateTable))))
+            .ToArray();
+        if (invalidSkeetIds.Length > 0)
+        {
+            throw new InvalidOperationException(
+                "MakeMagnifierGreatAgain: Skeet root filter validation failed for: "
+                    + string.Join(", ", invalidSkeetIds));
+        }
+
+        MongoId echo1Id = SigEcho1TemplateId;
+        MongoId dlocIrdId = UnvDlocIrdTemplateId;
+        if ((templateTable.Items.ContainsKey(echo1Id)
+                && skeetFilter.Filter.Contains(echo1Id))
+            || (templateTable.Items.ContainsKey(dlocIrdId)
+                && skeetFilter.Filter.Contains(dlocIrdId)))
+        {
+            throw new InvalidOperationException(
+                "MakeMagnifierGreatAgain: Skeet unexpectedly accepts ECHO1 or its UNV DLOC IRD base.");
+        }
+    }
+
+    private static void ValidateG33RootFilter(
+        string label,
+        TemplateTable templateTable,
+        SlotFilter filter,
+        HashSet<MongoId> onePowerOptics,
+        HashSet<MongoId> platformBoundCarrierIds)
+    {
+        var invalidIds = (filter.Filter ?? []).Where(id =>
+            templateTable.Items.TryGetValue(id, out var item)
+            && ((IsSight(item) && !onePowerOptics.Contains(id))
+                || (IsScopeCarrier(item)
+                    && (platformBoundCarrierIds.Contains(id)
+                        || ExplicitlyExcludedMountIds.Contains(id)
+                        || HasExcludedMountWording(item)))))
+            .ToArray();
+        if (invalidIds.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"MakeMagnifierGreatAgain: {label} root filter validation failed for: "
+                    + string.Join(", ", invalidIds));
+        }
     }
 
     private static HashSet<string> LoadTrustedRiserIds(
@@ -354,15 +586,17 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
     )
     {
         MongoId vanillaHhsId = VanillaHhsTemplateId;
-        MongoId mountCategoryId = MountCategoryId;
         var matching = 0;
         var added = 0;
 
         foreach (var template in templateTable.Items.Values)
         {
-            // The G33 is a rail-facing magnifier, not a child optic for another
-            // mount/riser. This prevents G33 -> riser -> G33 recursion.
-            if (template.Parent.Equals(mountCategoryId))
+            // Offset/angled adapters are intentionally outside MMGA's
+            // compatibility surface, even if another mod registered HHS-1 in
+            // one of their filters.
+            if (IsScopeCarrier(template)
+                && (ExplicitlyExcludedMountIds.Contains(template.Id)
+                    || HasExcludedMountWording(template)))
             {
                 continue;
             }
@@ -392,6 +626,195 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         return (matching, added);
     }
 
+    private static bool IsScopeCarrier(TemplateItem item)
+    {
+        MongoId mountCategoryId = MountCategoryId;
+        return item.Type == "Item"
+            && GetScopeFilters(item).Any()
+            && (item.Parent.Equals(mountCategoryId)
+                || (string.Equals(
+                        item.Properties?.SightModType,
+                        "iron",
+                        StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static Dictionary<MongoId, HashSet<MongoId>> BuildRailHostIndex(
+        IEnumerable<(TemplateItem Owner, SlotFilter Filter)> sightRailFilters)
+    {
+        var result = new Dictionary<MongoId, HashSet<MongoId>>();
+
+        foreach (var (owner, filter) in sightRailFilters)
+        {
+            foreach (var acceptedId in filter.Filter ?? [])
+            {
+                if (!result.TryGetValue(acceptedId, out var hosts))
+                {
+                    hosts = [];
+                    result[acceptedId] = hosts;
+                }
+
+                hosts.Add(owner.Id);
+            }
+        }
+
+        return result;
+    }
+
+    private static bool IsPlatformBoundCarrier(
+        MongoId itemId,
+        IReadOnlyDictionary<MongoId, HashSet<MongoId>> railHostsByAcceptedItem)
+    {
+        return !railHostsByAcceptedItem.TryGetValue(itemId, out var railHosts)
+            || railHosts.Count < MinimumGeneralRailHostCount;
+    }
+
+    private static bool HasExcludedMountWording(TemplateItem item)
+    {
+        return ContainsExcludedMountWording(item.Name)
+            || ContainsExcludedMountWording(item.Properties?.Name);
+    }
+
+    private static bool ContainsExcludedMountWording(string? value)
+    {
+        return value?.IndexOf("offset", StringComparison.OrdinalIgnoreCase) >= 0
+            || value?.IndexOf("angled", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static bool IsSkeetCarrierEligible(
+        TemplateItem item,
+        TemplateTable templateTable,
+        HashSet<MongoId> excludedVisionDeviceIds,
+        HashSet<MongoId> platformBoundCarrierIds)
+    {
+        return IsScopeCarrier(item)
+            && !platformBoundCarrierIds.Contains(item.Id)
+            && !ExplicitlyExcludedMountIds.Contains(item.Id)
+            && !HasExcludedMountWording(item)
+            && !HasDisqualifyingTacticalSlot(item, templateTable)
+            && HasAllowedSkeetSightDescendant(
+                item.Id,
+                templateTable,
+                excludedVisionDeviceIds,
+                platformBoundCarrierIds,
+                new HashSet<MongoId>());
+    }
+
+    private static bool HasDisqualifyingTacticalSlot(
+        TemplateItem item,
+        TemplateTable templateTable)
+    {
+        var hasTacticalSlot = item.Properties?.Slots?.Any(slot =>
+            slot.Name?.StartsWith("mod_tactical", StringComparison.OrdinalIgnoreCase)
+                == true) == true;
+
+        // A rail carrier with a tactical attachment slot but no recursive
+        // magnified-sight route is a riser/accessory rail, not a scope mount.
+        // Skeet excludes it; a true scope mount that also accepts a Vudu-class
+        // optic remains valid.
+        return hasTacticalSlot
+            && !HasMagnifiedDescendant(
+                item.Id,
+                templateTable,
+                new HashSet<MongoId>());
+    }
+
+    private static void CollectNestedG33CarrierConflicts(
+        MongoId itemId,
+        TemplateTable templateTable,
+        HashSet<MongoId> onePowerOptics,
+        HashSet<MongoId> platformBoundCarrierIds,
+        HashSet<MongoId> conflicts,
+        HashSet<MongoId> visited)
+    {
+        if (!visited.Add(itemId)
+            || !templateTable.Items.TryGetValue(itemId, out var item))
+        {
+            return;
+        }
+
+        foreach (var filter in GetAllSlotFilters(item))
+        {
+            foreach (var childId in filter.Filter ?? [])
+            {
+                if (!templateTable.Items.TryGetValue(childId, out var child))
+                {
+                    continue;
+                }
+
+                if (IsScopeCarrier(child))
+                {
+                    var isEligible = !platformBoundCarrierIds.Contains(childId)
+                        && !ExplicitlyExcludedMountIds.Contains(childId)
+                        && !HasExcludedMountWording(child)
+                        && HasOnePowerDescendant(
+                            childId,
+                            templateTable,
+                            onePowerOptics,
+                            platformBoundCarrierIds,
+                            new HashSet<MongoId>());
+                    if (!isEligible)
+                    {
+                        conflicts.Add(childId);
+                        continue;
+                    }
+                }
+
+                CollectNestedG33CarrierConflicts(
+                    childId,
+                    templateTable,
+                    onePowerOptics,
+                    platformBoundCarrierIds,
+                    conflicts,
+                    visited);
+            }
+        }
+    }
+
+    private static void CollectNestedSkeetCarrierConflicts(
+        MongoId itemId,
+        TemplateTable templateTable,
+        HashSet<MongoId> excludedVisionDeviceIds,
+        HashSet<MongoId> platformBoundCarrierIds,
+        HashSet<MongoId> conflicts,
+        HashSet<MongoId> visited)
+    {
+        if (!visited.Add(itemId)
+            || !templateTable.Items.TryGetValue(itemId, out var item))
+        {
+            return;
+        }
+
+        foreach (var filter in GetAllSlotFilters(item))
+        {
+            foreach (var childId in filter.Filter ?? [])
+            {
+                if (!templateTable.Items.TryGetValue(childId, out var child))
+                {
+                    continue;
+                }
+
+                if (IsScopeCarrier(child)
+                    && !IsSkeetCarrierEligible(
+                        child,
+                        templateTable,
+                        excludedVisionDeviceIds,
+                        platformBoundCarrierIds))
+                {
+                    conflicts.Add(childId);
+                    continue;
+                }
+
+                CollectNestedSkeetCarrierConflicts(
+                    childId,
+                    templateTable,
+                    excludedVisionDeviceIds,
+                    platformBoundCarrierIds,
+                    conflicts,
+                    visited);
+            }
+        }
+    }
+
     private static bool IsPureOnePowerOptic(TemplateItem item)
     {
         MongoId collimatorCategoryId = CollimatorCategoryId;
@@ -418,6 +841,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         MongoId itemId,
         TemplateTable templateTable,
         HashSet<MongoId> onePowerOptics,
+        HashSet<MongoId> platformBoundCarrierIds,
         HashSet<MongoId> visited
     )
     {
@@ -435,7 +859,17 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
                     return true;
                 }
 
-                if (HasOnePowerDescendant(childId, templateTable, onePowerOptics, visited))
+                if (platformBoundCarrierIds.Contains(childId))
+                {
+                    continue;
+                }
+
+                if (HasOnePowerDescendant(
+                    childId,
+                    templateTable,
+                    onePowerOptics,
+                    platformBoundCarrierIds,
+                    visited))
                 {
                     return true;
                 }
@@ -503,6 +937,14 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         TemplateItem item,
         TemplateTable templateTable)
     {
+        if (VisionDeviceNameTokens.Any(token =>
+                ContainsToken(item.Name, token)
+                || ContainsToken(item.Properties?.Name, token)
+                || ContainsToken(item.Properties?.Description, token)))
+        {
+            return true;
+        }
+
         MongoId nightVisionCategoryId = NightVisionCategoryId;
         MongoId thermalVisionCategoryId = ThermalVisionCategoryId;
         var visited = new HashSet<MongoId>();
@@ -527,10 +969,16 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         return false;
     }
 
+    private static bool ContainsToken(string? value, string token)
+    {
+        return value?.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
     private static bool HasAllowedSkeetSightDescendant(
         MongoId itemId,
         TemplateTable templateTable,
         HashSet<MongoId> excludedVisionDeviceIds,
+        HashSet<MongoId> platformBoundCarrierIds,
         HashSet<MongoId> visited
     )
     {
@@ -553,10 +1001,29 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
                     return true;
                 }
 
+                if (excludedVisionDeviceIds.Contains(childId))
+                {
+                    continue;
+                }
+
+                if (platformBoundCarrierIds.Contains(childId))
+                {
+                    continue;
+                }
+
+                if (IsScopeCarrier(child)
+                    && (ExplicitlyExcludedMountIds.Contains(childId)
+                        || HasExcludedMountWording(child)
+                        || HasDisqualifyingTacticalSlot(child, templateTable)))
+                {
+                    continue;
+                }
+
                 if (HasAllowedSkeetSightDescendant(
                     childId,
                     templateTable,
                     excludedVisionDeviceIds,
+                    platformBoundCarrierIds,
                     visited
                 ))
                 {
@@ -571,7 +1038,9 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
     private static IEnumerable<SlotFilter> GetScopeFilters(TemplateItem item)
     {
         var scopeSlots = item.Properties?.Slots?.Where(slot =>
-            string.Equals(slot.Name, FrontScopeSlotName, StringComparison.Ordinal)
+            slot.Name?.StartsWith(
+                FrontScopeSlotName,
+                StringComparison.OrdinalIgnoreCase) == true
         );
 
         return scopeSlots?.SelectMany(slot => slot.Properties?.Filters ?? []) ?? [];

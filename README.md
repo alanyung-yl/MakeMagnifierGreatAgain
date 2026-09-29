@@ -8,7 +8,7 @@ This is **v0.5.4**, the initial public proof-of-concept snapshot. It is not prod
 
 - Standalone EOTech G33 magnifier test item.
 - SkeetIR-L thermal clip-on test item with separated mount base geometry.
-- Automatic discovery of compatible 1x optics and rail mounts.
+- Recursive discovery of compatible optics, risers, and scope mounts.
 - Nested optic reticle propagation into the magnifier PiP view.
 - Inline and flipped magnifier modes using EFT optic controls.
 - Compatibility with custom optics and mounts that follow EFT's normal item structure.
@@ -24,13 +24,20 @@ This is **v0.5.4**, the initial public proof-of-concept snapshot. It is not prod
   parent, suppresses the pair's baked reticles, and creates a child `mod_scope`
   at the riser's base position for MMGA-compatible sights.
 - Available from Peacekeeper at loyalty level 1.
-- Both accept compatible 1x optics in their front `mod_scope` slot.
+- Both accept pure 1x optics and rail carriers with a recursive pure-1x route
+  in their front `mod_scope` slot. Mixed 1x/magnified mounts remain usable;
+  incompatible nested branches are regulated with item conflicts. A carrier
+  must expose a real scope slot and be registered across at least nine merged
+  rail hosts; weapon-family bridge parts are excluded unless their ID is in
+  `config.json`'s `trustedRiserIds`.
 
 ### SkeetIR thermal clip-on
 
 - `EOTech EXPS3 with Trijicon SkeetIR-L (MMGA test)`
 - Available from Peacekeeper at loyalty level 1.
 - Provides inline and flipped-to-the-side 1x modes.
+- Accepts ordinary 1x and magnified sights while excluding night/thermal
+  optics, offset/angled mounts, and incompatible nested riser paths.
 
 ## Installation
 

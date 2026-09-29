@@ -70,10 +70,6 @@ namespace MakeMagnifierGreatAgain
             if (magnifierAim != null)
             {
                 var magnifierRoot = magnifierAim.ScopePrefabCache.transform;
-                var immediateChild = FindImmediateChildScope(magnifierRoot);
-                var collapseBossSelectors = immediateChild != null
-                    && IsWilcoxBossRootName(immediateChild.transform.name)
-                    && IsWithinSkeetIr(magnifierRoot);
                 PreserveAimBone(magnifierAim.Bone);
                 RestoreVanillaOpticSightShader(magnifierAim.ScopePrefabCache);
                 RestoreVanillaBackLensShader(magnifierRoot);
@@ -88,25 +84,31 @@ namespace MakeMagnifierGreatAgain
                         continue;
                     }
 
-                    if (immediateChild != null
-                        && ReferenceEquals(candidate.ScopePrefabCache, immediateChild))
+                    if (candidate.ScopePrefabCache != null
+                        && !ReferenceEquals(
+                            candidate.ScopePrefabCache,
+                            magnifierAim.ScopePrefabCache)
+                        && candidate.ScopePrefabCache.transform.IsChildOf(
+                            magnifierRoot))
                     {
                         PreserveAimBone(candidate.Bone);
                         ProceduralWeaponAnimation.SightNBone retainedAim;
-                        if (!collapseBossSelectors
-                            || !CollapsedG33ChildAims.TryGetValue(
+                        if (!CollapsedG33ChildAims.TryGetValue(
                                 __instance.GetInstanceID(),
                                 out retainedAim)
-                            || ShouldPreferNestedOneXAim(retainedAim, candidate))
+                            || ShouldPreferNestedOneXAim(
+                                retainedAim,
+                                candidate,
+                                magnifierRoot))
                         {
                             CollapsedG33ChildAims[__instance.GetInstanceID()] =
                                 candidate;
                         }
 
-                        // BOSS exposes separate reflex and integrated-iron
-                        // aim entries. Collapse both from EFT's public Switch
-                        // Sight list, while retaining camera 001 privately as
-                        // the folded-G33 1x donor.
+                        // Every descendant remains collapsed out of EFT's
+                        // public Switch Sight list. For an integrated-iron
+                        // carrier, retain the deeper child optic privately;
+                        // BOSS still prefers camera 001 over its lower irons.
                     }
 
                     __instance.ScopeAimTransforms.RemoveAt(index);
@@ -303,7 +305,8 @@ namespace MakeMagnifierGreatAgain
 
         private static bool ShouldPreferNestedOneXAim(
             ProceduralWeaponAnimation.SightNBone current,
-            ProceduralWeaponAnimation.SightNBone candidate)
+            ProceduralWeaponAnimation.SightNBone candidate,
+            Transform magnifierRoot)
         {
             if (candidate == null || candidate.Bone == null)
             {
@@ -314,8 +317,31 @@ namespace MakeMagnifierGreatAgain
                 return true;
             }
 
+            var currentCache = current.ScopePrefabCache;
+            var candidateCache = candidate.ScopePrefabCache;
+            var currentDepth = currentCache != null
+                ? GetDescendantDepth(currentCache.transform, magnifierRoot)
+                : -1;
+            var candidateDepth = candidateCache != null
+                ? GetDescendantDepth(candidateCache.transform, magnifierRoot)
+                : -1;
+            if (candidateDepth != currentDepth)
+            {
+                return candidateDepth > currentDepth;
+            }
+
             // BOSS camera 001 is its native reflex axis; camera 002 belongs
             // to the lower integrated irons. Folded G33 1x must use 001.
+            var isBoss = candidateCache != null
+                && IsWilcoxBossRootName(candidateCache.transform.name);
+            if (!isBoss)
+            {
+                // FindAimTransforms is traversed backwards above. Replacing a
+                // same-depth ordinary sight preserves MMGA's prior selection
+                // of EFT's earliest registered aim entry.
+                return true;
+            }
+
             var candidateIsPrimary = string.Equals(
                 candidate.Bone.name,
                 "mod_aim_camera_001",
@@ -325,6 +351,21 @@ namespace MakeMagnifierGreatAgain
                 "mod_aim_camera_001",
                 StringComparison.OrdinalIgnoreCase);
             return candidateIsPrimary && !currentIsPrimary;
+        }
+
+        private static int GetDescendantDepth(
+            Transform descendant,
+            Transform ancestor)
+        {
+            var depth = 0;
+            var cursor = descendant;
+            while (cursor != null && cursor != ancestor)
+            {
+                depth++;
+                cursor = cursor.parent;
+            }
+
+            return cursor == ancestor ? depth : -1;
         }
 
         internal static void PreserveAimBone(Transform bone)
@@ -895,11 +936,17 @@ namespace MakeMagnifierGreatAgain
                 return restoredPreviousState;
             }
 
-            var nestedG33Child = NestedSightAimPatch.IsG33RootName(
+            var g33OneXChildAim = NestedSightAimPatch.IsG33RootName(
                 childCache.transform.name)
-                ? NestedSightAimPatch.FindImmediateChildScope(
-                    childCache.transform)
+                ? NestedSightAimPatch.FindCollapsedG33ChildAim(
+                    animation,
+                    childCache)
                 : null;
+            var nestedG33Child = g33OneXChildAim?.ScopePrefabCache
+                ?? (NestedSightAimPatch.IsG33RootName(childCache.transform.name)
+                    ? NestedSightAimPatch.FindImmediateChildScope(
+                        childCache.transform)
+                    : null);
             var usesWilcoxBossDonor = nestedG33Child != null
                 && NestedSightAimPatch.IsWilcoxBossRootName(
                     nestedG33Child.transform.name);
@@ -916,9 +963,7 @@ namespace MakeMagnifierGreatAgain
                 ChildCache = childCache,
                 ThermalData = thermalData,
                 OriginalChildAim = new ProceduralWeaponAnimation.SightNBone(),
-                G33OneXChildAim = NestedSightAimPatch.FindCollapsedG33ChildAim(
-                    animation,
-                    childCache),
+                G33OneXChildAim = g33OneXChildAim,
                 UsesWilcoxBossDonor = usesWilcoxBossDonor,
                 // Every custom-G33 3x overlay must preserve the donor's
                 // native screen projection. The older non-BOSS path combined
@@ -1615,7 +1660,7 @@ namespace MakeMagnifierGreatAgain
             bool preferNestedChild)
         {
             var reticleCache = preferNestedChild
-                ? NestedSightAimPatch.FindImmediateChildScope(childCache.transform)
+                ? FindDeepestCollimatorCache(childCache)
                 : childCache;
             if ((reticleCache == null || !reticleCache.HasCollimators)
                 && childCache.HasCollimators)
@@ -1627,6 +1672,44 @@ namespace MakeMagnifierGreatAgain
                 ? reticleCache.FirstCollimator
                 : null;
             return collimator;
+        }
+
+        private static ScopePrefabCache FindDeepestCollimatorCache(
+            ScopePrefabCache hostCache)
+        {
+            if (hostCache == null)
+            {
+                return null;
+            }
+
+            ScopePrefabCache deepest = null;
+            var deepestDepth = -1;
+            var caches = hostCache.transform.GetComponentsInChildren<ScopePrefabCache>(true);
+            foreach (var cache in caches)
+            {
+                if (ReferenceEquals(cache, hostCache) || !cache.HasCollimators)
+                {
+                    continue;
+                }
+
+                var depth = 0;
+                var cursor = cache.transform;
+                while (cursor != null && cursor != hostCache.transform)
+                {
+                    depth++;
+                    cursor = cursor.parent;
+                }
+
+                if (cursor == hostCache.transform && depth > deepestDepth)
+                {
+                    deepest = cache;
+                    deepestDepth = depth;
+                }
+            }
+
+            return deepest
+                ?? NestedSightAimPatch.FindImmediateChildScope(
+                    hostCache.transform);
         }
 
         private static Shader FindG33ReticleShader()
