@@ -189,10 +189,12 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
                 .Select(item => item.Id))
             .ToHashSet();
 
-        // A G33 may directly receive a pure 1x sight, or a rail-facing
-        // carrier that has at least one recursive route to a pure 1x sight.
-        // Mixed carriers remain available; their magnified branches are
-        // closed with ConflictingItems below instead of rejecting the carrier.
+        // A G33 may directly receive a pure 1x sight, or a rail-facing riser
+        // that has at least one recursive route to a pure 1x sight. A true
+        // scope mount whose own scope slot accepts a magnified optic is not a
+        // useful G33 child and is rejected outright. A riser is not rejected
+        // merely because one of its nested choices is such a scope mount;
+        // that child is blocked contextually by ConflictingItems below.
         var g33Carriers = g33CarrierCandidates
             .Where(id =>
                 templateTable.Items.TryGetValue(id, out var item)
@@ -200,6 +202,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
                 && !platformBoundCarrierIds.Contains(id)
                 && !ExplicitlyExcludedMountIds.Contains(id)
                 && !HasExcludedMountWording(item)
+                && !AcceptsMagnifiedScope(item, templateTable)
                 && HasOnePowerDescendant(
                     id,
                     templateTable,
@@ -376,11 +379,19 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             excludedVisionDeviceIds,
             platformBoundCarrierIds);
 
-        var mixedG33CarrierCount = g33Carriers.Count(id =>
-            HasMagnifiedDescendant(
-                id,
-                templateTable,
-                new HashSet<MongoId>()));
+        var rejectedG33ScopeMountCount = g33CarrierCandidates.Count(id =>
+            templateTable.Items.TryGetValue(id, out var item)
+                && IsScopeCarrier(item)
+                && !platformBoundCarrierIds.Contains(id)
+                && !ExplicitlyExcludedMountIds.Contains(id)
+                && !HasExcludedMountWording(item)
+                && AcceptsMagnifiedScope(item, templateTable)
+                && HasOnePowerDescendant(
+                    id,
+                    templateTable,
+                    onePowerCandidates,
+                    platformBoundCarrierIds,
+                    new HashSet<MongoId>()));
         var integratedIronCarrierCount = g33Carriers.Count(id =>
             templateTable.Items.TryGetValue(id, out var item)
                 && string.Equals(
@@ -401,7 +412,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
                 + $"{skeetNestedCarrierConflicts.Count} Skeet nested-carrier conflict(s). "
                 + $"Whitelisted both G33 variants in {railMountFilters} rail-facing mount filter(s) "
                 + $"(new: {railMountCustomAdded}/{railMountEpicAdded}). "
-                + $"Retained {mixedG33CarrierCount} mixed 1x/magnified carrier(s) and "
+                + $"Rejected {rejectedG33ScopeMountCount} G33 scope mount(s) with a magnified branch; retained "
                 + $"{integratedIronCarrierCount} integrated-iron carrier(s). "
                 + $"Excluded {platformBoundCarrierIds.Count} platform-bound carrier(s) "
                 + $"seen on fewer than {MinimumGeneralRailHostCount} rail host(s). "
@@ -524,7 +535,8 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
                 || (IsScopeCarrier(item)
                     && (platformBoundCarrierIds.Contains(id)
                         || ExplicitlyExcludedMountIds.Contains(id)
-                        || HasExcludedMountWording(item)))))
+                        || HasExcludedMountWording(item)
+                        || AcceptsMagnifiedScope(item, templateTable)))))
             .ToArray();
         if (invalidIds.Length > 0)
         {
@@ -746,6 +758,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
                     var isEligible = !platformBoundCarrierIds.Contains(childId)
                         && !ExplicitlyExcludedMountIds.Contains(childId)
                         && !HasExcludedMountWording(child)
+                        && !AcceptsMagnifiedScope(child, templateTable)
                         && HasOnePowerDescendant(
                             childId,
                             templateTable,
@@ -912,6 +925,21 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         }
 
         return false;
+    }
+
+    private static bool AcceptsMagnifiedScope(
+        TemplateItem item,
+        TemplateTable templateTable)
+    {
+        MongoId collimatorCategoryId = CollimatorCategoryId;
+        MongoId compactCollimatorCategoryId = CompactCollimatorCategoryId;
+
+        return GetScopeFilters(item).Any(filter =>
+            (filter.Filter ?? []).Any(childId =>
+                templateTable.Items.TryGetValue(childId, out var child)
+                && !child.Parent.Equals(collimatorCategoryId)
+                && !child.Parent.Equals(compactCollimatorCategoryId)
+                && IsMagnifiedSight(child)));
     }
 
     private static bool IsMagnifiedSight(TemplateItem item)

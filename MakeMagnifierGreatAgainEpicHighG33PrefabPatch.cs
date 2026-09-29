@@ -397,8 +397,8 @@ namespace MakeMagnifierGreatAgain
                     "Calibrated the adapted Unity G33 optic-camera FOV from "
                     + originalFieldOfView.ToString("0.####") + " to "
                     + fieldOfView.ToString("0.####")
-                    + "; child reticle projection is corrected without "
-                    + "changing WeaponCustomizer-dependent transforms.");
+                    + "; the child reticle keeps its native projection and "
+                    + "point of aim.");
             }
         }
 

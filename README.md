@@ -25,11 +25,12 @@ This is **v0.5.4**, the initial public proof-of-concept snapshot. It is not prod
   at the riser's base position for MMGA-compatible sights.
 - Available from Peacekeeper at loyalty level 1.
 - Both accept pure 1x optics and rail carriers with a recursive pure-1x route
-  in their front `mod_scope` slot. Mixed 1x/magnified mounts remain usable;
-  incompatible nested branches are regulated with item conflicts. A carrier
-  must expose a real scope slot and be registered across at least nine merged
-  rail hosts; weapon-family bridge parts are excluded unless their ID is in
-  `config.json`'s `trustedRiserIds`.
+  in their front `mod_scope` slot. A scope mount whose own optic slot accepts
+  a magnified sight is excluded from the G33 whitelist; incompatible scope
+  mounts reached through a separate riser are regulated with item conflicts.
+  A carrier must expose a real scope slot and be registered across at least
+  nine merged rail hosts; weapon-family bridge parts are excluded unless their
+  ID is in `config.json`'s `trustedRiserIds`.
 
 ### SkeetIR thermal clip-on
 
