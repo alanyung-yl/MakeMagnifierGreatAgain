@@ -24,6 +24,9 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
     private const string G33TemplateId = "31d49a6fcf9e8c1864d7e401";
     private const string EpicHighG33TemplateId = "31d49a6fcf9e8c1864d7e420";
     private const string SkeetIrTemplateId = "31d49a6fcf9e8c1864d7e410";
+    private const string Lt101RiserTemplateId = "5c064c400db834001d23f468";
+    private const string EpicUnityFastRiserBlackTemplateId = "2e681ada9836f6e030080191";
+    private const string EpicUnityFastRiserFdeTemplateId = "e1543def58291668bac8e2c8";
     private const string VanillaHhsTemplateId = "5c07dd120db834001c39092d";
     private const string SigEcho1TemplateId = "6478641c19d732620e045e17";
     private const string UnvDlocIrdTemplateId = "5a1ead28fcdbcb001912fa9f";
@@ -56,6 +59,17 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
     private static readonly HashSet<MongoId> ExplicitlyExcludedMountIds =
     [
         "5649a2464bdc2d91118b45a8", // NcSTAR MPR45 45-degree backup mount
+    ];
+
+    // These known universal risers are part of MMGA's built-in compatibility
+    // policy. Unlike user overrides, they still have to satisfy the normal
+    // carrier-shape and recursive 1x checks; they only bypass the rail-host
+    // breadth heuristic used to reject platform-specific bridge parts.
+    private static readonly HashSet<MongoId> PermanentTrustedRiserIds =
+    [
+        Lt101RiserTemplateId,
+        EpicUnityFastRiserBlackTemplateId,
+        EpicUnityFastRiserFdeTemplateId,
     ];
 
     // EFT models weapon-mounted night/thermal sights as ordinary optics; only
@@ -127,6 +141,33 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             );
         }
 
+        MongoId[] epicUnityFastRiserIds =
+        [
+            EpicUnityFastRiserBlackTemplateId,
+            EpicUnityFastRiserFdeTemplateId,
+        ];
+        var epicUnityFastRiserFilters = new List<(TemplateItem Owner, SlotFilter Filter)>();
+        foreach (var riserId in epicUnityFastRiserIds)
+        {
+            if (!templateTable.Items.TryGetValue(riserId, out var riserTemplate))
+            {
+                throw new InvalidOperationException(
+                    $"MakeMagnifierGreatAgain: EpicAIO Unity FAST optic riser {riserId} was not registered."
+                );
+            }
+
+            var riserScopeFilters = GetScopeFilters(riserTemplate).ToArray();
+            if (riserScopeFilters.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    $"MakeMagnifierGreatAgain: EpicAIO Unity FAST optic riser {riserId} has no mod_scope filter."
+                );
+            }
+
+            epicUnityFastRiserFilters.AddRange(riserScopeFilters.Select(filter =>
+                (Owner: riserTemplate, Filter: filter)));
+        }
+
         MongoId skeetIrId = SkeetIrTemplateId;
         templateTable.Items.TryGetValue(skeetIrId, out var skeetIrTemplate);
         var skeetIrTargetFilter = skeetIrTemplate
@@ -147,7 +188,43 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             .Select(item => item.Id)
             .ToHashSet();
 
-        var trustedRiserIds = LoadTrustedRiserIds(logger);
+        var configuredWhitelistIds = LoadAdditionalWhitelistIds(logger);
+        var itemIdsByText = templateTable.Items.Values
+            .Where(item => item.Type == "Item")
+            .ToDictionary(
+                item => item.Id.ToString(),
+                item => item.Id,
+                StringComparer.OrdinalIgnoreCase);
+        var reservedHierarchyIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            G33TemplateId,
+            EpicHighG33TemplateId,
+            SkeetIrTemplateId,
+        };
+        var userWhitelistIds = new HashSet<MongoId>();
+        foreach (var configuredId in configuredWhitelistIds)
+        {
+            if (reservedHierarchyIds.Contains(configuredId))
+            {
+                logger.Warning(
+                    $"MakeMagnifierGreatAgain: ignored reserved hierarchy ID {configuredId} "
+                        + "from config.json additionalWhitelistIds."
+                );
+                continue;
+            }
+
+            if (!itemIdsByText.TryGetValue(configuredId, out var configuredItemId))
+            {
+                logger.Warning(
+                    $"MakeMagnifierGreatAgain: config.json additionalWhitelistIds entry "
+                        + $"{configuredId} is not a registered item and was ignored."
+                );
+                continue;
+            }
+
+            userWhitelistIds.Add(configuredItemId);
+        }
+
         var directRailAnchors = DirectRailAnchorIds
             .Where(templateTable.Items.ContainsKey)
             .ToHashSet();
@@ -175,7 +252,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             .Where(id =>
                 templateTable.Items.TryGetValue(id, out var item)
                 && IsScopeCarrier(item)
-                && !trustedRiserIds.Contains(id.ToString())
+                && !PermanentTrustedRiserIds.Contains(id)
                 && IsPlatformBoundCarrier(id, railHostsByAcceptedItem))
             .ToHashSet();
 
@@ -184,9 +261,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             .ToHashSet();
 
         var g33CarrierCandidates = railAcceptedItems
-            .Concat(templateTable.Items.Values
-                .Where(item => trustedRiserIds.Contains(item.Id.ToString()))
-                .Select(item => item.Id))
+            .Concat(PermanentTrustedRiserIds.Where(templateTable.Items.ContainsKey))
             .ToHashSet();
 
         // A G33 may directly receive a pure 1x sight, or a rail-facing riser
@@ -214,6 +289,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
 
         var g33Discovered = onePowerOptics
             .Concat(g33Carriers)
+            .Concat(userWhitelistIds)
             .Where(id =>
                 !id.Equals(g33Id)
                 && !id.Equals(epicHighG33Id)
@@ -226,6 +302,18 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         epicHighTargetFilter.Filter ??= [];
         epicHighTargetFilter.Filter.Clear();
         epicHighTargetFilter.Filter.UnionWith(g33Discovered);
+
+        // EpicAIO's black and FDE Unity FAST risers are known universal rail
+        // risers. Give their optic slots the same dynamically discovered 1x
+        // optic/carrier base as MMGA's G33. The generic rail-mount pass below
+        // deliberately adds both G33 variants as well, preserving the global
+        // riser -> G33 compatibility policy.
+        foreach (var (_, filter) in epicUnityFastRiserFilters)
+        {
+            filter.Filter ??= [];
+            filter.Filter.Clear();
+            filter.Filter.UnionWith(g33Discovered);
+        }
 
         var excludedVisionDeviceIds = templateTable.Items.Values
             .Where(item =>
@@ -282,6 +370,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             .Where(id =>
                 !id.Equals(g33Id)
                 && !id.Equals(epicHighG33Id)
+                && !userWhitelistIds.Contains(id)
                 // Skeet is the valid outer parent of either G33. Putting it
                 // in a G33 conflict list blocks Skeet -> G33 as well as the
                 // reverse because EFT evaluates conflicts assembly-wide.
@@ -296,9 +385,11 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
                 templateTable,
                 onePowerCandidates,
                 platformBoundCarrierIds,
+                userWhitelistIds,
                 g33NestedCarrierConflicts,
                 new HashSet<MongoId>());
         }
+        g33NestedCarrierConflicts.ExceptWith(userWhitelistIds);
         var skeetNestedCarrierConflicts = new HashSet<MongoId>();
         foreach (var carrierId in skeetCarrierIds)
         {
@@ -317,10 +408,16 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         g33Template.Properties!.ConflictingItems ??= [];
         g33Template.Properties.ConflictingItems.UnionWith(nonOnePowerSightIds);
         g33Template.Properties.ConflictingItems.UnionWith(g33NestedCarrierConflicts);
+        g33Template.Properties.ConflictingItems.ExceptWith(userWhitelistIds);
+        g33Template.Properties.ConflictingItems.Add(g33Id);
+        g33Template.Properties.ConflictingItems.Add(epicHighG33Id);
         g33Template.Properties.ConflictingItems.Remove(skeetIrId);
         epicHighG33Template.Properties!.ConflictingItems ??= [];
         epicHighG33Template.Properties.ConflictingItems.UnionWith(nonOnePowerSightIds);
         epicHighG33Template.Properties.ConflictingItems.UnionWith(g33NestedCarrierConflicts);
+        epicHighG33Template.Properties.ConflictingItems.ExceptWith(userWhitelistIds);
+        epicHighG33Template.Properties.ConflictingItems.Add(g33Id);
+        epicHighG33Template.Properties.ConflictingItems.Add(epicHighG33Id);
         epicHighG33Template.Properties.ConflictingItems.Remove(skeetIrId);
 
         if (skeetIrTemplate?.Properties != null)
@@ -367,6 +464,12 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             epicHighG33Id
         );
 
+        ValidateEpicUnityFastRiserFilters(
+            epicUnityFastRiserFilters,
+            g33Discovered,
+            g33Id,
+            epicHighG33Id);
+
         ValidateRootFilters(
             templateTable,
             g33Template,
@@ -377,7 +480,8 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             skeetIrTargetFilter,
             onePowerCandidates,
             excludedVisionDeviceIds,
-            platformBoundCarrierIds);
+            platformBoundCarrierIds,
+            userWhitelistIds);
 
         var rejectedG33ScopeMountCount = g33CarrierCandidates.Count(id =>
             templateTable.Items.TryGetValue(id, out var item)
@@ -402,6 +506,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         logger.Success(
             $"MakeMagnifierGreatAgain: discovered {onePowerOptics.Count} pure 1x optic(s) "
                 + $"and {g33Carriers.Count} G33-compatible sight carrier(s); "
+                + $"applied {userWhitelistIds.Count} user whitelist override(s); "
                 + $"both G33 mod_scope filters now contain {g33Discovered.Count} item(s). "
                 + (skeetIrTargetFilter != null
                     ? $"The Skeet-IR filter contains {skeetSightIds.Count} sight(s), "
@@ -412,6 +517,9 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
                 + $"{skeetNestedCarrierConflicts.Count} Skeet nested-carrier conflict(s). "
                 + $"Whitelisted both G33 variants in {railMountFilters} rail-facing mount filter(s) "
                 + $"(new: {railMountCustomAdded}/{railMountEpicAdded}). "
+                + $"Synchronized {epicUnityFastRiserFilters.Count} EpicAIO Unity FAST riser "
+                + $"mod_scope filter(s) with the G33-compatible whitelist. "
+                + "Made the two G33 variants mutually exclusive. "
                 + $"Rejected {rejectedG33ScopeMountCount} G33 scope mount(s) with a magnified branch; retained "
                 + $"{integratedIronCarrierCount} integrated-iron carrier(s). "
                 + $"Excluded {platformBoundCarrierIds.Count} platform-bound carrier(s) "
@@ -447,6 +555,30 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         return Task.CompletedTask;
     }
 
+    private static void ValidateEpicUnityFastRiserFilters(
+        IEnumerable<(TemplateItem Owner, SlotFilter Filter)> riserFilters,
+        HashSet<MongoId> g33Discovered,
+        MongoId g33Id,
+        MongoId epicHighG33Id)
+    {
+        var expected = g33Discovered.ToHashSet();
+        expected.Add(g33Id);
+        expected.Add(epicHighG33Id);
+
+        foreach (var (owner, filter) in riserFilters)
+        {
+            if (filter.Filter?.SetEquals(expected) == true)
+            {
+                continue;
+            }
+
+            throw new InvalidOperationException(
+                $"MakeMagnifierGreatAgain: EpicAIO Unity FAST optic riser {owner.Id} "
+                    + "did not retain the G33-compatible whitelist."
+            );
+        }
+    }
+
     private static void ValidateRootFilters(
         TemplateTable templateTable,
         TemplateItem g33Template,
@@ -457,20 +589,23 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         SlotFilter? skeetFilter,
         HashSet<MongoId> onePowerOptics,
         HashSet<MongoId> excludedVisionDeviceIds,
-        HashSet<MongoId> platformBoundCarrierIds)
+        HashSet<MongoId> platformBoundCarrierIds,
+        HashSet<MongoId> userWhitelistIds)
     {
         ValidateG33RootFilter(
             "custom-bundle G33",
             templateTable,
             g33Filter,
             onePowerOptics,
-            platformBoundCarrierIds);
+            platformBoundCarrierIds,
+            userWhitelistIds);
         ValidateG33RootFilter(
             "EpicAIO G33",
             templateTable,
             epicHighG33Filter,
             onePowerOptics,
-            platformBoundCarrierIds);
+            platformBoundCarrierIds,
+            userWhitelistIds);
 
         if (skeetFilter?.Filter == null)
         {
@@ -484,6 +619,10 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             || !skeetFilter.Filter.Contains(epicHighG33Id)
             || g33Filter.Filter?.Contains(skeetId) == true
             || epicHighG33Filter.Filter?.Contains(skeetId) == true
+            || g33Template.Properties?.ConflictingItems?.Contains(g33Id) != true
+            || g33Template.Properties?.ConflictingItems?.Contains(epicHighG33Id) != true
+            || epicHighG33Template.Properties?.ConflictingItems?.Contains(g33Id) != true
+            || epicHighG33Template.Properties?.ConflictingItems?.Contains(epicHighG33Id) != true
             || g33Template.Properties?.ConflictingItems?.Contains(skeetId) == true
             || epicHighG33Template.Properties?.ConflictingItems?.Contains(skeetId) == true
             || skeetTemplate?.Properties?.ConflictingItems?.Contains(g33Id) == true
@@ -491,7 +630,8 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         if (hierarchyIsInvalid)
         {
             throw new InvalidOperationException(
-                "MakeMagnifierGreatAgain: directional hierarchy validation failed; expected Skeet -> either G33 -> 1x sight.");
+                "MakeMagnifierGreatAgain: hierarchy validation failed; expected "
+                    + "Skeet -> exactly one mutually exclusive G33 variant -> 1x sight.");
         }
 
         var invalidSkeetIds = skeetFilter.Filter.Where(id =>
@@ -527,16 +667,21 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         TemplateTable templateTable,
         SlotFilter filter,
         HashSet<MongoId> onePowerOptics,
-        HashSet<MongoId> platformBoundCarrierIds)
+        HashSet<MongoId> platformBoundCarrierIds,
+        HashSet<MongoId> userWhitelistIds)
     {
         var invalidIds = (filter.Filter ?? []).Where(id =>
-            templateTable.Items.TryGetValue(id, out var item)
+            !userWhitelistIds.Contains(id)
+            && templateTable.Items.TryGetValue(id, out var item)
             && ((IsSight(item) && !onePowerOptics.Contains(id))
                 || (IsScopeCarrier(item)
                     && (platformBoundCarrierIds.Contains(id)
                         || ExplicitlyExcludedMountIds.Contains(id)
                         || HasExcludedMountWording(item)
-                        || AcceptsMagnifiedScope(item, templateTable)))))
+                        || AcceptsMagnifiedScope(
+                            item,
+                            templateTable,
+                            userWhitelistIds)))))
             .ToArray();
         if (invalidIds.Length > 0)
         {
@@ -546,7 +691,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         }
     }
 
-    private static HashSet<string> LoadTrustedRiserIds(
+    private static HashSet<string> LoadAdditionalWhitelistIds(
         ISptLogger<MakeMagnifierGreatAgainCompatibilityMod> logger
     )
     {
@@ -562,7 +707,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             {
                 logger.Warning(
                     $"MakeMagnifierGreatAgain: compatibility config was not found at {configPath}; "
-                        + "no trusted-riser exceptions will be applied."
+                        + "no user whitelist overrides will be applied."
                 );
                 return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             }
@@ -572,7 +717,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true }
             );
 
-            return (config?.TrustedRiserIds ?? [])
+            return (config?.AdditionalWhitelistIds ?? [])
                 .Where(id => !string.IsNullOrWhiteSpace(id))
                 .Select(id => id.Trim())
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -581,7 +726,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         {
             logger.Error(
                 $"MakeMagnifierGreatAgain: failed to read {configPath}; "
-                    + $"no trusted-riser exceptions will be applied. {exception.Message}"
+                    + $"no user whitelist overrides will be applied. {exception.Message}"
             );
             return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         }
@@ -589,7 +734,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
 
     private sealed record CompatibilityConfig
     {
-        public List<string> TrustedRiserIds { get; init; } = [];
+        public List<string> AdditionalWhitelistIds { get; init; } = [];
     }
 
     private static (int Matching, int Added) AddToHhsCompatibleParentSlots(
@@ -735,6 +880,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         TemplateTable templateTable,
         HashSet<MongoId> onePowerOptics,
         HashSet<MongoId> platformBoundCarrierIds,
+        HashSet<MongoId> userWhitelistIds,
         HashSet<MongoId> conflicts,
         HashSet<MongoId> visited)
     {
@@ -758,7 +904,10 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
                     var isEligible = !platformBoundCarrierIds.Contains(childId)
                         && !ExplicitlyExcludedMountIds.Contains(childId)
                         && !HasExcludedMountWording(child)
-                        && !AcceptsMagnifiedScope(child, templateTable)
+                        && !AcceptsMagnifiedScope(
+                            child,
+                            templateTable,
+                            userWhitelistIds)
                         && HasOnePowerDescendant(
                             childId,
                             templateTable,
@@ -777,6 +926,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
                     templateTable,
                     onePowerOptics,
                     platformBoundCarrierIds,
+                    userWhitelistIds,
                     conflicts,
                     visited);
             }
@@ -929,14 +1079,16 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
 
     private static bool AcceptsMagnifiedScope(
         TemplateItem item,
-        TemplateTable templateTable)
+        TemplateTable templateTable,
+        HashSet<MongoId>? ignoredChildIds = null)
     {
         MongoId collimatorCategoryId = CollimatorCategoryId;
         MongoId compactCollimatorCategoryId = CompactCollimatorCategoryId;
 
         return GetScopeFilters(item).Any(filter =>
             (filter.Filter ?? []).Any(childId =>
-                templateTable.Items.TryGetValue(childId, out var child)
+                ignoredChildIds?.Contains(childId) != true
+                && templateTable.Items.TryGetValue(childId, out var child)
                 && !child.Parent.Equals(collimatorCategoryId)
                 && !child.Parent.Equals(compactCollimatorCategoryId)
                 && IsMagnifiedSight(child)));

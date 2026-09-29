@@ -29,8 +29,13 @@ This is **v0.5.4**, the initial public proof-of-concept snapshot. It is not prod
   a magnified sight is excluded from the G33 whitelist; incompatible scope
   mounts reached through a separate riser are regulated with item conflicts.
   A carrier must expose a real scope slot and be registered across at least
-  nine merged rail hosts; weapon-family bridge parts are excluded unless their
-  ID is in `config.json`'s `trustedRiserIds`.
+  nine merged rail hosts; weapon-family bridge parts are otherwise excluded.
+  The LT101 and EpicAIO's black/FDE Unity FAST optic risers are permanent
+  built-in trusted risers. Add item template IDs to `config.json`'s
+  `additionalWhitelistIds` array to explicitly add user-selected items to the
+  G33-compatible whitelist and the Unity FAST riser filters derived from it.
+- The two MMGA G33 variants conflict with themselves and each other, limiting
+  each weapon assembly to one MMGA/Unity G33 at a time.
 
 ### SkeetIR thermal clip-on
 
