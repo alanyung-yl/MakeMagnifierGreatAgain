@@ -13,6 +13,7 @@ Version 0.6.0 expands the standalone G33 lineup using EpicAIO's assets, improves
 - Requires `WTT-CommonLib 3.0.6`
 - Requires `Epic's All In One 5.0.1`
 - Integrates with `Tyfon.WeaponCustomizer 4.0.0`; WeaponCustomizer is not a required dependency
+- Tested with `WTT-Armory`, `Epic's All In One`, and `JSOC`
 - Other SPT or dependency versions may work, but are not guaranteed
 
 ## Features
@@ -26,7 +27,7 @@ Version 0.6.0 expands the standalone G33 lineup using EpicAIO's assets, improves
 - Unity FAST riser height compensation for SkeetIR assemblies
 - WeaponCustomizer-aware rebasing of compensated child-slot positions
 
-## Included Test Items
+## Included Items
 
 ### EOTech G33 Magnifiers
 
@@ -43,7 +44,7 @@ The FDE, black, and tan variants reuse EpicAIO's EXPS3 high, UH-1 high, and EXPS
 
 - `EOTech EXPS3 with Trijicon SkeetIR-L (MMGA test)`
 
-The SkeetIR test item is available from Peacekeeper at loyalty level 1. It provides inline and folded 1x modes and accepts ordinary 1x and magnified sights while excluding night/thermal optics, offset mounts, and incompatible mounts.
+The SkeetIR test item is available from Peacekeeper at loyalty level 1. It provides inline and folded 1x modes and accepts ordinary 1x and magnified sights while excluding night/thermal optics, offset mounts, and incompatible mounts. For magnified child sights, MMGA applies the thermal shader to the child `mod_scope` sight's PiP and disables SkeetIR's physical render while the player is aiming down sights; if this behavior is compatible with FIKA, other players in the session should not see the physical SkeetIR while it is being aimed through.
 
 When SkeetIR is installed directly on EpicAIO's black or FDE Unity FAST optic riser, MMGA lowers only SkeetIR's child `mod_scope` by that riser's displacement. SkeetIR remains on the raised platform while its child optic returns to the weapon-rail plane. If WeaponCustomizer controls that slot, MMGA moves its saved and current placement to the corrected position while keeping normal dragging. Other risers are not changed.
 
@@ -76,7 +77,7 @@ SPT_Runtime/user/mods/MakeMagnifierGreatAgain/config.json
 ```
 
 Add item template IDs to `additionalWhitelistIds` to explicitly include custom
-rail carriers or sights in MMGA's G33-compatible discovery results:
+risers or sights in MMGA's G33-compatible discovery results:
 
 ```json
 {
@@ -90,28 +91,16 @@ rail carriers or sights in MMGA's G33-compatible discovery results:
 Restart the server after changing the configuration. Explicit entries still
 need a usable EFT-style attachment structure at runtime.
 
-## Verify It Loaded
-
-- Start the SPT server and confirm that MMGA reports custom-item and compatibility registration.
-- Confirm that Peacekeeper LL1 sells the MMGA test items.
-
-## Troubleshooting
-
-- If a previously tested assembly behaves differently after changing mounts, use WeaponCustomizer's revert function before comparing placement.
-- Compare magnifiers on the same weapon, rail path, sight mode, resolution, and ammunition before diagnosing reticle scale or point-of-impact differences.
-
 ## Known Limitations
 
 - MMGA is still an experimental proof of concept.
+- A 1x sight's collimator must be aligned with the SkeetIR & G33 centerline for its reticle to appear centered in view. SkeetIR does not have its own reticle, and MMGA does not project the 1x reticle into the SkeetIR PiP; the player is still aiming through the 1x sight while SkeetIR adds the thermal view.
 - G33 nested reticles may retain a small positional or point-of-impact offset.
-- Some magnified or unusually structured optics may produce an incorrect PiP image.
+- Point of aim and point of impact are not perfectly consistent in every assembly. Even the real-world EXPS3 + Unity FTC riser + Unity FAST FTC OMNI G33 riser arrangement may show a slight offset, and the exact cause is not yet confirmed.
+- Some optics or unusually structured assemblies may produce an incorrect PiP image or behave unexpectedly.
+- Because MMGA uses fixed `mod_scope` positions, models may clip into one another. WeaponCustomizer is highly recommended for adjusting compatible assemblies.
+- Mod compatibility is not fully tested. Reports of incompatible sights, mounts, risers, or assemblies are greatly appreciated.
 - Compatibility depends on other mods using recognizable EFT optic, cache, and attachment-slot structures.
-
-## Development Notes
-
-- Client builds deploy the plugin DLL to `BepInEx/plugins/MakeMagnifierGreatAgain` unless `DeployToSPT=false` is set.
-- Server builds deploy the server DLL and resources to `SPT_Runtime/user/mods/MakeMagnifierGreatAgain` unless `DeployToSPT=false` is set.
-- The investigation history and regression boundaries are maintained in `docs/MMGA_SKEET_IR_BUG_RECOVERY_PLAYBOOK.md`.
 
 ## Uninstall
 
@@ -120,8 +109,13 @@ Remove both installed locations:
 - `BepInEx/plugins/MakeMagnifierGreatAgain`
 - `SPT_Runtime/user/mods/MakeMagnifierGreatAgain`
 
-Remove MMGA custom items from weapons and inventory before uninstalling to
-avoid leaving missing custom templates in an existing profile.
+Remove MMGA custom items from weapons and inventory before uninstalling to avoid leaving missing custom templates in an existing profile.
+
+## Credits
+
+- SkeetIR model and JSOC integration by [bobinstien](https://github.com/c11gunworks-lab/JSOC). MMGA includes a modified SkeetIR bundle with the author's permission. The original JSOC projects are available at [JSOC](https://github.com/c11gunworks-lab/JSOC) and [Spy's JSOC-SWR](https://github.com/SpyPilotEFT/Spys-JSOC-SWR).
+- EOTech G33, EXPS3, UH-1, and Unity FAST assets provided by [EpicRangeTime's Epic's All In One](https://github.com/EpicRangeTime/EpicRangeTime-Weapons).
+- Thanks to the original authors and contributors for creating and maintaining these assets.
 
 ## License
 
