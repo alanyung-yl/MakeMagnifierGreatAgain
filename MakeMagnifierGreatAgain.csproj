@@ -46,11 +46,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="MakeMagnifierGreatAgainPlugin.cs" />
-    <Compile Include="MakeMagnifierGreatAgainEpicHighG33PrefabPatch.cs" />
-    <Compile Include="MakeMagnifierGreatAgainNestedSightAimPatch.cs" />
-    <Compile Include="MakeMagnifierGreatAgainSkeetFastRiserPatch.cs" />
-    <Compile Include="SkeetIrAspectRatioPatch.cs" />
+    <Compile Include="src\MakeMagnifierGreatAgainPlugin.cs" />
+    <Compile Include="src\MakeMagnifierGreatAgainEpicHighG33PrefabPatch.cs" />
+    <Compile Include="src\MakeMagnifierGreatAgainNestedSightAimPatch.cs" />
+    <Compile Include="src\MakeMagnifierGreatAgainSkeetFastRiserPatch.cs" />
+    <Compile Include="src\SkeetIrAspectRatioPatch.cs" />
   </ItemGroup>
 
   <Target Name="ValidateSPTRoot" BeforeTargets="ResolveReferences">

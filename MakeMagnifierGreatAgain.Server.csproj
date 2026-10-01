@@ -38,8 +38,8 @@
       <ExcludeAssets>runtime</ExcludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <Compile Include="MakeMagnifierGreatAgainServerMod.cs" />
-    <Compile Include="MakeMagnifierGreatAgainCompatibilityMod.cs" />
+    <Compile Include="src\MakeMagnifierGreatAgainServerMod.cs" />
+    <Compile Include="src\MakeMagnifierGreatAgainCompatibilityMod.cs" />
     <ServerResource Include="bundles.json" />
     <ServerResource Include="bundles\**\*" />
     <ServerResource Include="config.json" />
