@@ -35,13 +35,15 @@ namespace MakeMagnifierGreatAgain
         private const string G33BaseName = "G33 Base";
         private const string AimBoneName = "mod_aim_camera";
         private const string ScopeSlotName = "mod_scope";
-        private const float CalibratedUnityG33FieldOfView = 7.5f;
+        private const float CalibratedUnityG33FieldOfView = 5.16f;  // original = 5.16; vanilla = 5.8333
         private static readonly Vector3 ScopeSlotLocalEulerAngles =
             new Vector3(270f, 0f, 0f);
 
         private static readonly HashSet<string> AdaptedTemplateLogs =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private static readonly HashSet<string> MissingHierarchyWarnings =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly HashSet<string> DonorDiagnosticLogs =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         [HarmonyPrefix]
@@ -66,6 +68,9 @@ namespace MakeMagnifierGreatAgain
             if (IsDonorPairTemplate(templateId))
             {
                 state?.RestoreEpicPair();
+                InstallDonorAimDiagnostic(
+                    prefabRoot,
+                    templateId);
                 return;
             }
 
@@ -162,6 +167,10 @@ namespace MakeMagnifierGreatAgain
                 templateId,
                 MakeMagnifierGreatAgainPlugin.EpicUh1HighG33TemplateId,
                 StringComparison.OrdinalIgnoreCase);
+            var preserveFdeRiserHierarchy = string.Equals(
+                templateId,
+                MakeMagnifierGreatAgainPlugin.EpicHighG33TemplateId,
+                StringComparison.OrdinalIgnoreCase);
 
             var riser = isLowPair
                 ? null
@@ -194,17 +203,23 @@ namespace MakeMagnifierGreatAgain
             }
 
             var g33Host = cache.transform;
-            var sourceAim = riser != null
-                ? FindDescendantExact(riser, AimBoneName)
-                    // The UH-1 high pair stores its aim bone beside the riser,
-                    // sight, and Unity G33 beneath the pair root. The EXPS3
-                    // high pair stores the same bone inside ftc_riser.
-                    ?? FindDirectChildExact(riser.parent, AimBoneName)
-                // The low pair keeps mod_aim_camera beside its EXPS3 and G33.
-                : FindDirectChildExact(prefabRoot, AimBoneName);
-            if (sourceAim == null && state.SourceAimBone != null)
+            // After the first adaptation the generated runtime bone is the
+            // only transform still named mod_aim_camera. Always prefer the
+            // captured EpicAIO source on a repeated AttachMods pass; otherwise
+            // the adapter can select its own generated bone and hide it.
+            var sourceAim = state.SourceAimBone;
+            if (sourceAim == null)
             {
-                sourceAim = state.SourceAimBone;
+                sourceAim = riser != null
+                    ? FindDescendantExact(riser, AimBoneName)
+                        // The UH-1 high pair stores its aim bone beside the
+                        // riser, sight, and Unity G33 beneath the pair root.
+                        // The EXPS3 high pair stores the same bone inside
+                        // ftc_riser.
+                        ?? FindDirectChildExact(riser.parent, AimBoneName)
+                    // The low pair keeps mod_aim_camera beside its EXPS3 and
+                    // G33.
+                    : FindDirectChildExact(prefabRoot, AimBoneName);
             }
             if (sourceAim == null)
             {
@@ -218,7 +233,11 @@ namespace MakeMagnifierGreatAgain
 
             var donorSight = isLowPair
                 ? FindDirectChildExact(prefabRoot, Exps3LowDonorSightName)
-                : FindDescendantExact(prefabRoot, Uh1DonorSightName);
+                : preserveFdeRiserHierarchy
+                    ? FindDescendantExact(
+                        prefabRoot,
+                        Exps3LowDonorSightName)
+                    : FindDescendantExact(prefabRoot, Uh1DonorSightName);
             if (donorSight == null && state.DonorSight != null)
             {
                 donorSight = state.DonorSight;
@@ -233,25 +252,38 @@ namespace MakeMagnifierGreatAgain
                 unityG33,
                 cache,
                 sourceAim,
-                donorSight);
+                donorSight,
+                preserveFdeRiserHierarchy);
             state.NormalizeMagnifierFieldOfView(
                 CalibratedUnityG33FieldOfView);
 
-            // Recreate the pair's aim transform under the logical G33 before
-            // hiding its original sight/riser hierarchy.
-            var runtimeAim = state.GetOrCreateRuntimeAim(g33Host);
-            CopyWorldPose(sourceAim, runtimeAim, false);
-            runtimeAim.name = AimBoneName;
-            runtimeAim.gameObject.layer = sourceAim.gameObject.layer;
-            runtimeAim.gameObject.SetActive(true);
-            sourceAim.name = EpicHighG33RuntimeState.HiddenAimBoneName;
+            if (preserveFdeRiserHierarchy)
+            {
+                // EXPS3/high owns the complete G33 and aim transform beneath
+                // ftc_riser. Keep that authored transform container active and
+                // retain its original aim bone. Only its captured renderers
+                // are hidden below, so no parent scale or animation state is
+                // lost merely to remove the baked riser and EXPS3 geometry.
+                state.UseSourceAim();
+            }
+            else
+            {
+                // The other pairs can isolate their G33 without losing an
+                // authored parent transform. Recreate the pair's aim transform
+                // under the logical G33 before hiding the original hierarchy.
+                var runtimeAim = state.GetOrCreateRuntimeAim(g33Host);
+                CopyWorldPose(sourceAim, runtimeAim, false);
+                runtimeAim.name = AimBoneName;
+                runtimeAim.gameObject.layer = sourceAim.gameObject.layer;
+                runtimeAim.gameObject.SetActive(true);
+                sourceAim.name = EpicHighG33RuntimeState.HiddenAimBoneName;
 
-            // Promote the complete G33 subtree when necessary, retaining the
-            // bundle-authored world placement and all serialized ScopeModeInfo
-            // references to mode_000/mode_001.
-            state.PromoteUnityG33(
-                g33Host,
-                riser != null ? riser.parent : prefabRoot);
+                // Retain the bundle-authored world placement and all serialized
+                // ScopeModeInfo references to mode_000/mode_001.
+                state.PromoteUnityG33(
+                    g33Host,
+                    riser != null ? riser.parent : prefabRoot);
+            }
 
             // High pairs use the FTC riser's base position. The low pair has no
             // riser, so its immediate EXPS3 child is the replacement anchor.
@@ -276,10 +308,17 @@ namespace MakeMagnifierGreatAgain
             state.EnableAdaptedReticleTextureScale();
 
             g33Host.name = G33RuntimeRootName;
-            state.HideDonorGeometry();
-            if (riser != null)
+            if (preserveFdeRiserHierarchy)
             {
-                riser.gameObject.SetActive(false);
+                state.HideCapturedFdeRiserRenderers();
+            }
+            else
+            {
+                state.HideDonorGeometry();
+                if (riser != null)
+                {
+                    riser.gameObject.SetActive(false);
+                }
             }
             return true;
         }
@@ -328,6 +367,74 @@ namespace MakeMagnifierGreatAgain
             }
 
             return closestAncestor ?? prefabRoot.GetComponent<ScopePrefabCache>();
+        }
+
+        private static void InstallDonorAimDiagnostic(
+            Transform prefabRoot,
+            string templateId)
+        {
+            var isLowPair = string.Equals(
+                templateId,
+                EpicExps3LowPairTemplateId,
+                StringComparison.OrdinalIgnoreCase);
+            var riser = isLowPair
+                ? null
+                : FindDescendantExact(prefabRoot, RiserName)
+                    ?? FindDescendantExact(prefabRoot, UnityFtcRiserName);
+            var unityG33 = FindDescendantExact(
+                prefabRoot,
+                isLowPair ? G33BaseName : UnityG33Name);
+            var aim = riser != null
+                ? FindDescendantExact(riser, AimBoneName)
+                    ?? FindDirectChildExact(riser.parent, AimBoneName)
+                : FindDirectChildExact(prefabRoot, AimBoneName);
+            if (aim == null)
+            {
+                aim = FindDescendantExact(prefabRoot, AimBoneName);
+            }
+            if (aim == null || unityG33 == null)
+            {
+                return;
+            }
+
+            var diagnostic = aim.GetComponent<
+                EpicOriginalG33AimDiagnostic>();
+            if (diagnostic == null)
+            {
+                diagnostic = aim.gameObject.AddComponent<
+                    EpicOriginalG33AimDiagnostic>();
+            }
+            diagnostic.Initialize(
+                GetDonorPairLabel(templateId),
+                unityG33);
+            if (DonorDiagnosticLogs.Add(templateId))
+            {
+                MakeMagnifierGreatAgainPlugin.LogInfo(
+                    "Armed the " + GetDonorPairLabel(templateId)
+                    + " rendered-ADS aim diagnostic on '"
+                    + aim.name + "' relative to '" + unityG33.name + "'.");
+            }
+        }
+
+        private static string GetDonorPairLabel(string templateId)
+        {
+            if (string.Equals(
+                templateId,
+                EpicExps3HighPairTemplateId,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return "EpicAIO EXPS3/high pair";
+            }
+
+            if (string.Equals(
+                templateId,
+                EpicUh1HighPairTemplateId,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return "EpicAIO UH-1/high pair";
+            }
+
+            return "EpicAIO EXPS3/low pair";
         }
 
         private static int AncestorDistance(Transform child, Transform ancestor)
@@ -405,6 +512,151 @@ namespace MakeMagnifierGreatAgain
 
     }
 
+    internal sealed class EpicOriginalG33AimDiagnostic : MonoBehaviour
+    {
+        private Transform _unityG33;
+        private string _pairLabel;
+        private Vector3 _authoredPositionInUnityG33;
+        private Quaternion _authoredRotationInUnityG33;
+        private bool _initialized;
+        private bool _comparisonLogWritten;
+
+        internal void Initialize(string pairLabel, Transform unityG33)
+        {
+            if (unityG33 == null)
+            {
+                return;
+            }
+
+            _pairLabel = pairLabel;
+            _unityG33 = unityG33;
+            _authoredPositionInUnityG33 = unityG33.InverseTransformPoint(
+                transform.position);
+            _authoredRotationInUnityG33 = Quaternion.Inverse(
+                    unityG33.rotation)
+                * transform.rotation;
+            _comparisonLogWritten = false;
+            _initialized = true;
+        }
+
+        private void OnEnable()
+        {
+            Camera.onPreCull -= OnCameraPreCull;
+            Camera.onPreCull += OnCameraPreCull;
+        }
+
+        private void OnDisable()
+        {
+            Camera.onPreCull -= OnCameraPreCull;
+        }
+
+        private void OnDestroy()
+        {
+            Camera.onPreCull -= OnCameraPreCull;
+        }
+
+        private void OnCameraPreCull(Camera camera)
+        {
+            if (_comparisonLogWritten
+                || !EpicHighG33RuntimeState.IsSelectedAimAtMainCamera(
+                    camera,
+                    transform)
+                || !TryCapturePose(
+                    out var renderedPosition,
+                    out var renderedRotation))
+            {
+                return;
+            }
+
+            _comparisonLogWritten = true;
+            MakeMagnifierGreatAgainPlugin.LogInfo(
+                _pairLabel
+                + " rendered ADS mod_aim_camera in G33-local space: "
+                + "authored="
+                + EpicHighG33RuntimeState.FormatAimPose(
+                    _authoredPositionInUnityG33,
+                    _authoredRotationInUnityG33)
+                + "; rendered="
+                + EpicHighG33RuntimeState.FormatAimPose(
+                    renderedPosition,
+                    renderedRotation)
+                + " (authored delta "
+                + EpicHighG33RuntimeState.FormatAimPoseDelta(
+                    _authoredPositionInUnityG33,
+                    _authoredRotationInUnityG33,
+                    renderedPosition,
+                    renderedRotation)
+                + ").");
+        }
+
+        internal bool TryCapturePose(
+            out Vector3 positionInUnityG33,
+            out Quaternion rotationInUnityG33)
+        {
+            positionInUnityG33 = Vector3.zero;
+            rotationInUnityG33 = Quaternion.identity;
+            if (!_initialized || _unityG33 == null)
+            {
+                return false;
+            }
+
+            positionInUnityG33 = _unityG33.InverseTransformPoint(
+                transform.position);
+            rotationInUnityG33 = Quaternion.Inverse(_unityG33.rotation)
+                * transform.rotation;
+            return true;
+        }
+
+        internal void LogRuntimeAimComparison(
+            Vector3 positionBeforeAlignment,
+            Quaternion rotationBeforeAlignment)
+        {
+            if (_comparisonLogWritten
+                || !TryCapturePose(
+                    out var positionAfterAlignment,
+                    out var rotationAfterAlignment))
+            {
+                return;
+            }
+
+            _comparisonLogWritten = true;
+            MakeMagnifierGreatAgainPlugin.LogInfo(
+                _pairLabel
+                + " runtime mod_aim_camera comparison in G33-local space: "
+                + "authored="
+                + EpicHighG33RuntimeState.FormatAimPose(
+                    _authoredPositionInUnityG33,
+                    _authoredRotationInUnityG33)
+                + "; before OpticLookAtGlobal="
+                + EpicHighG33RuntimeState.FormatAimPose(
+                    positionBeforeAlignment,
+                    rotationBeforeAlignment)
+                + " (authored delta "
+                + EpicHighG33RuntimeState.FormatAimPoseDelta(
+                    _authoredPositionInUnityG33,
+                    _authoredRotationInUnityG33,
+                    positionBeforeAlignment,
+                    rotationBeforeAlignment)
+                + "); after="
+                + EpicHighG33RuntimeState.FormatAimPose(
+                    positionAfterAlignment,
+                    rotationAfterAlignment)
+                + " (authored delta "
+                + EpicHighG33RuntimeState.FormatAimPoseDelta(
+                    _authoredPositionInUnityG33,
+                    _authoredRotationInUnityG33,
+                    positionAfterAlignment,
+                    rotationAfterAlignment)
+                + ", alignment shift "
+                + EpicHighG33RuntimeState.FormatAimPoseDelta(
+                    positionBeforeAlignment,
+                    rotationBeforeAlignment,
+                    positionAfterAlignment,
+                    rotationAfterAlignment)
+                + ").");
+        }
+    }
+
     internal sealed class EpicHighG33RuntimeState : MonoBehaviour
     {
         internal const float CenteredReticleArtworkScale = 0.5f;
@@ -444,6 +696,12 @@ namespace MakeMagnifierGreatAgain
             internal float FieldOfView;
         }
 
+        private sealed class RendererVisibilityState
+        {
+            internal Renderer Renderer;
+            internal bool Enabled;
+        }
+
         private sealed class ReticleRendererOverrideState
         {
             internal Renderer Renderer;
@@ -463,6 +721,7 @@ namespace MakeMagnifierGreatAgain
         }
 
         private Transform _runtimeAim;
+        private Transform _activeAdaptedAim;
         private Transform _runtimeSlot;
         private string _originalG33HostName;
         private Transform _originalUnityG33Parent;
@@ -470,11 +729,14 @@ namespace MakeMagnifierGreatAgain
         private Vector3 _originalUnityG33LocalPosition;
         private Quaternion _originalUnityG33LocalRotation;
         private Vector3 _originalUnityG33LocalScale;
+        private Vector3 _originalAimPositionInUnityG33;
+        private Quaternion _originalAimRotationInUnityG33;
         private bool _originalRiserActive;
         private bool _originalDonorSightActive;
         private bool _originalHasCollimators;
         private DonorReticleState[] _donorReticles;
         private ScopeCameraState[] _scopeCameras;
+        private RendererVisibilityState[] _fdeRiserRenderers;
         private readonly List<ReticleRendererOverrideState>
             _activeReticleOverrides =
                 new List<ReticleRendererOverrideState>();
@@ -488,6 +750,8 @@ namespace MakeMagnifierGreatAgain
             new HashSet<int>();
         private bool _fieldOfViewLogWritten;
         private bool _reticleTextureScaleLogWritten;
+        private bool _runtimeAimComparisonLogWritten;
+        private bool _fdeRendererSuppressionLogWritten;
         private bool _adapted;
         private bool _captured;
 
@@ -498,7 +762,8 @@ namespace MakeMagnifierGreatAgain
             Transform unityG33,
             ScopePrefabCache cache,
             Transform sourceAimBone,
-            Transform donorSight)
+            Transform donorSight,
+            bool preserveFdeRiserHierarchy)
         {
             if (_captured)
             {
@@ -516,13 +781,100 @@ namespace MakeMagnifierGreatAgain
             _originalUnityG33LocalPosition = unityG33.localPosition;
             _originalUnityG33LocalRotation = unityG33.localRotation;
             _originalUnityG33LocalScale = unityG33.localScale;
+            _originalAimPositionInUnityG33 = unityG33.InverseTransformPoint(
+                sourceAimBone.position);
+            _originalAimRotationInUnityG33 = Quaternion.Inverse(
+                    unityG33.rotation)
+                * sourceAimBone.rotation;
             _originalRiserActive = riser != null
                 && riser.gameObject.activeSelf;
             _originalDonorSightActive = donorSight != null
                 && donorSight.gameObject.activeSelf;
             CaptureDonorReticles(cache);
             CaptureScopeCameras(cache);
+            if (preserveFdeRiserHierarchy)
+            {
+                CaptureFdeRiserRenderers(riser, unityG33);
+            }
             _captured = true;
+        }
+
+        private void CaptureFdeRiserRenderers(
+            Transform riser,
+            Transform unityG33)
+        {
+            if (riser == null || unityG33 == null)
+            {
+                _fdeRiserRenderers = new RendererVisibilityState[0];
+                return;
+            }
+
+            var states = new List<RendererVisibilityState>();
+            foreach (var renderer in riser.GetComponentsInChildren<
+                Renderer>(true))
+            {
+                if (renderer == null
+                    || ReferenceEquals(renderer.transform, unityG33)
+                    || renderer.transform.IsChildOf(unityG33))
+                {
+                    continue;
+                }
+
+                states.Add(new RendererVisibilityState
+                {
+                    Renderer = renderer,
+                    Enabled = renderer.enabled
+                });
+            }
+            _fdeRiserRenderers = states.ToArray();
+        }
+
+        internal void HideCapturedFdeRiserRenderers()
+        {
+            if (Riser != null)
+            {
+                Riser.gameObject.SetActive(true);
+            }
+            if (_fdeRiserRenderers == null)
+            {
+                return;
+            }
+
+            var hidden = 0;
+            foreach (var state in _fdeRiserRenderers)
+            {
+                if (state == null || state.Renderer == null)
+                {
+                    continue;
+                }
+                state.Renderer.enabled = false;
+                hidden++;
+            }
+
+            if (!_fdeRendererSuppressionLogWritten)
+            {
+                _fdeRendererSuppressionLogWritten = true;
+                MakeMagnifierGreatAgainPlugin.LogInfo(
+                    "Preserved the EpicAIO EXPS3/high ftc_riser transform "
+                    + "hierarchy and original mod_aim_camera while hiding "
+                    + hidden + " captured non-G33 renderer(s).");
+            }
+        }
+
+        private void RestoreCapturedFdeRiserRenderers()
+        {
+            if (_fdeRiserRenderers == null)
+            {
+                return;
+            }
+
+            foreach (var state in _fdeRiserRenderers)
+            {
+                if (state != null && state.Renderer != null)
+                {
+                    state.Renderer.enabled = state.Enabled;
+                }
+            }
         }
 
         internal void HideDonorGeometry()
@@ -751,6 +1103,7 @@ namespace MakeMagnifierGreatAgain
         private void OnCameraPreCull(Camera camera)
         {
             RestoreReticleMaterials();
+            LogRenderedRuntimeAimComparison(camera);
             if (!_adapted
                 || camera == null
                 || _runtimeSlot == null
@@ -804,6 +1157,44 @@ namespace MakeMagnifierGreatAgain
                     + "% around UV center 0.5 while retaining native "
                     + "_MarkScale, _MarkShift, and the normal 1x material.");
             }
+        }
+
+        private void LogRenderedRuntimeAimComparison(Camera camera)
+        {
+            if (_runtimeAimComparisonLogWritten
+                || !IsSelectedAimAtMainCamera(camera, _activeAdaptedAim)
+                || !TryCaptureRuntimeAimPose(
+                    out var renderedPosition,
+                    out var renderedRotation))
+            {
+                return;
+            }
+
+            _runtimeAimComparisonLogWritten = true;
+            var liveSourcePosition = SourceAimBone != null
+                ? UnityG33.InverseTransformPoint(SourceAimBone.position)
+                : _originalAimPositionInUnityG33;
+            var liveSourceRotation = SourceAimBone != null
+                ? Quaternion.Inverse(UnityG33.rotation)
+                    * SourceAimBone.rotation
+                : _originalAimRotationInUnityG33;
+            MakeMagnifierGreatAgainPlugin.LogInfo(
+                "MMGA Unity G33 rendered ADS mod_aim_camera in G33-local "
+                + "space: EpicAIO authored="
+                + FormatAimPose(
+                    _originalAimPositionInUnityG33,
+                    _originalAimRotationInUnityG33)
+                + "; hidden source now="
+                + FormatAimPose(liveSourcePosition, liveSourceRotation)
+                + "; rendered="
+                + FormatAimPose(renderedPosition, renderedRotation)
+                + " (authored delta "
+                + FormatAimPoseDelta(
+                    _originalAimPositionInUnityG33,
+                    _originalAimRotationInUnityG33,
+                    renderedPosition,
+                    renderedRotation)
+                + ").");
         }
 
         private void OnCameraPostRender(Camera camera)
@@ -1142,7 +1533,188 @@ namespace MakeMagnifierGreatAgain
                 _runtimeAim = gameObject.transform;
             }
             _runtimeAim.SetParent(parent, true);
+            _activeAdaptedAim = _runtimeAim;
             return _runtimeAim;
+        }
+
+        internal Transform UseSourceAim()
+        {
+            if (_runtimeAim != null)
+            {
+                _runtimeAim.name = InactiveRuntimeAimName;
+                _runtimeAim.gameObject.SetActive(false);
+            }
+            if (SourceAimBone == null)
+            {
+                _activeAdaptedAim = null;
+                return null;
+            }
+
+            SourceAimBone.name = "mod_aim_camera";
+            SourceAimBone.gameObject.SetActive(true);
+            _activeAdaptedAim = SourceAimBone;
+            return SourceAimBone;
+        }
+
+        internal static EpicHighG33RuntimeState FindForRuntimeAim(
+            Transform aimBone)
+        {
+            if (aimBone == null)
+            {
+                return null;
+            }
+
+            var state = aimBone.GetComponentInParent<
+                EpicHighG33RuntimeState>();
+            return state != null
+                && ReferenceEquals(state._activeAdaptedAim, aimBone)
+                ? state
+                : null;
+        }
+
+        internal static bool IsSelectedAimAtMainCamera(
+            Camera camera,
+            Transform aimBone)
+        {
+            if (camera == null || aimBone == null)
+            {
+                return false;
+            }
+
+            var cameraManager = CameraManager.Instance;
+            var player = EFT.GamePlayerOwner.MyPlayer;
+            var animation = player != null
+                ? player.ProceduralWeaponAnimation
+                : null;
+            var selectedAim = animation != null
+                ? animation.CurrentScope
+                : null;
+            return cameraManager != null
+                && ReferenceEquals(cameraManager.Camera, camera)
+                && animation.IsAiming
+                && animation.FirstPersonPointOfView
+                && selectedAim != null
+                && ReferenceEquals(selectedAim.Bone, aimBone);
+        }
+
+        internal bool TryCaptureRuntimeAimPose(
+            out Vector3 positionInUnityG33,
+            out Quaternion rotationInUnityG33)
+        {
+            positionInUnityG33 = Vector3.zero;
+            rotationInUnityG33 = Quaternion.identity;
+            if (!_adapted
+                || _activeAdaptedAim == null
+                || UnityG33 == null)
+            {
+                return false;
+            }
+
+            positionInUnityG33 = UnityG33.InverseTransformPoint(
+                _activeAdaptedAim.position);
+            rotationInUnityG33 = Quaternion.Inverse(UnityG33.rotation)
+                * _activeAdaptedAim.rotation;
+            return true;
+        }
+
+        internal void LogRuntimeAimComparison(
+            Vector3 positionBeforeAlignment,
+            Quaternion rotationBeforeAlignment)
+        {
+            if (_runtimeAimComparisonLogWritten
+                || !TryCaptureRuntimeAimPose(
+                    out var positionAfterAlignment,
+                    out var rotationAfterAlignment))
+            {
+                return;
+            }
+
+            _runtimeAimComparisonLogWritten = true;
+            var liveSourcePosition = SourceAimBone != null
+                ? UnityG33.InverseTransformPoint(SourceAimBone.position)
+                : _originalAimPositionInUnityG33;
+            var liveSourceRotation = SourceAimBone != null
+                ? Quaternion.Inverse(UnityG33.rotation)
+                    * SourceAimBone.rotation
+                : _originalAimRotationInUnityG33;
+
+            MakeMagnifierGreatAgainPlugin.LogInfo(
+                "Unity G33 runtime mod_aim_camera comparison in G33-local "
+                + "space: EpicAIO authored="
+                + FormatAimPose(
+                    _originalAimPositionInUnityG33,
+                    _originalAimRotationInUnityG33)
+                + "; hidden source now="
+                + FormatAimPose(liveSourcePosition, liveSourceRotation)
+                + "; runtime before OpticLookAtGlobal="
+                + FormatAimPose(
+                    positionBeforeAlignment,
+                    rotationBeforeAlignment)
+                + " (authored delta "
+                + FormatAimPoseDelta(
+                    _originalAimPositionInUnityG33,
+                    _originalAimRotationInUnityG33,
+                    positionBeforeAlignment,
+                    rotationBeforeAlignment)
+                + "); runtime after="
+                + FormatAimPose(
+                    positionAfterAlignment,
+                    rotationAfterAlignment)
+                + " (authored delta "
+                + FormatAimPoseDelta(
+                    _originalAimPositionInUnityG33,
+                    _originalAimRotationInUnityG33,
+                    positionAfterAlignment,
+                    rotationAfterAlignment)
+                + ", alignment shift "
+                + FormatAimPoseDelta(
+                    positionBeforeAlignment,
+                    rotationBeforeAlignment,
+                    positionAfterAlignment,
+                    rotationAfterAlignment)
+                + ").");
+        }
+
+        internal static string FormatAimPose(
+            Vector3 position,
+            Quaternion rotation)
+        {
+            return "pos " + FormatMillimetres(position)
+                + ", rot " + FormatDegrees(rotation.eulerAngles);
+        }
+
+        internal static string FormatAimPoseDelta(
+            Vector3 sourcePosition,
+            Quaternion sourceRotation,
+            Vector3 targetPosition,
+            Quaternion targetRotation)
+        {
+            return FormatMillimetres(targetPosition - sourcePosition)
+                + ", "
+                + Quaternion.Angle(sourceRotation, targetRotation)
+                    .ToString("F4")
+                + " deg";
+        }
+
+        private static string FormatMillimetres(Vector3 value)
+        {
+            return "["
+                + (value.x * 1000f).ToString("F3") + ", "
+                + (value.y * 1000f).ToString("F3") + ", "
+                + (value.z * 1000f).ToString("F3") + "] mm";
+        }
+
+        private static string FormatDegrees(Vector3 value)
+        {
+            return "["
+                + ToSignedDegrees(value.x).ToString("F3") + ", "
+                + ToSignedDegrees(value.y).ToString("F3") + ", "
+                + ToSignedDegrees(value.z).ToString("F3") + "] deg";
+        }
+
+        private static float ToSignedDegrees(float value)
+        {
+            return value > 180f ? value - 360f : value;
         }
 
         internal Transform GetOrCreateRuntimeSlot(Transform parent)
@@ -1164,6 +1736,7 @@ namespace MakeMagnifierGreatAgain
             }
 
             _adapted = false;
+            _runtimeAimComparisonLogWritten = false;
             RestoreReticleMaterials();
 
             if (G33Cache != null)
@@ -1176,6 +1749,7 @@ namespace MakeMagnifierGreatAgain
             }
             RestoreDonorReticles();
             RestoreScopeCameras();
+            RestoreCapturedFdeRiserRenderers();
             if (UnityG33 != null && _originalUnityG33Parent != null)
             {
                 UnityG33.SetParent(_originalUnityG33Parent, false);
@@ -1199,6 +1773,7 @@ namespace MakeMagnifierGreatAgain
                 _runtimeAim.name = InactiveRuntimeAimName;
                 _runtimeAim.gameObject.SetActive(false);
             }
+            _activeAdaptedAim = null;
             if (_runtimeSlot != null)
             {
                 _runtimeSlot.name = InactiveRuntimeSlotName;

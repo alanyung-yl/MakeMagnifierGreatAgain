@@ -2691,9 +2691,51 @@ namespace MakeMagnifierGreatAgain
     {
         private static readonly HashSet<int> LoggedCaches = new HashSet<int>();
 
-        [HarmonyPrefix]
-        private static bool Prefix(ProceduralWeaponAnimation __instance)
+        private struct EpicRuntimeAimSnapshot
         {
+            internal EpicHighG33RuntimeState AdaptedState;
+            internal EpicOriginalG33AimDiagnostic OriginalState;
+            internal Vector3 PositionInUnityG33;
+            internal Quaternion RotationInUnityG33;
+        }
+
+        [HarmonyPrefix]
+        private static bool Prefix(
+            ProceduralWeaponAnimation __instance,
+            out EpicRuntimeAimSnapshot __state)
+        {
+            __state = default;
+            var selectedAim = __instance != null
+                ? __instance.CurrentScope
+                : null;
+            var epicRuntimeState = selectedAim != null
+                ? EpicHighG33RuntimeState.FindForRuntimeAim(
+                    selectedAim.Bone)
+                : null;
+            if (epicRuntimeState != null
+                && epicRuntimeState.TryCaptureRuntimeAimPose(
+                    out var positionInUnityG33,
+                    out var rotationInUnityG33))
+            {
+                __state.AdaptedState = epicRuntimeState;
+                __state.PositionInUnityG33 = positionInUnityG33;
+                __state.RotationInUnityG33 = rotationInUnityG33;
+            }
+            else if (selectedAim != null && selectedAim.Bone != null)
+            {
+                var originalDiagnostic = selectedAim.Bone.GetComponent<
+                    EpicOriginalG33AimDiagnostic>();
+                if (originalDiagnostic != null
+                    && originalDiagnostic.TryCapturePose(
+                        out positionInUnityG33,
+                        out rotationInUnityG33))
+                {
+                    __state.OriginalState = originalDiagnostic;
+                    __state.PositionInUnityG33 = positionInUnityG33;
+                    __state.RotationInUnityG33 = rotationInUnityG33;
+                }
+            }
+
             SkeetIrSightSelectionPatch.FrontClipOnState frontClipOn;
             if (SkeetIrSightSelectionPatch.TryGetFrontClipOnState(
                     __instance,
@@ -2752,6 +2794,17 @@ namespace MakeMagnifierGreatAgain
                     + $"' (mode={cache.CurrentModeId}, borrowed={boneOwner != cache}).");
             }
             return false;
+        }
+
+        [HarmonyPostfix]
+        private static void Postfix(EpicRuntimeAimSnapshot __state)
+        {
+            __state.AdaptedState?.LogRuntimeAimComparison(
+                __state.PositionInUnityG33,
+                __state.RotationInUnityG33);
+            __state.OriginalState?.LogRuntimeAimComparison(
+                __state.PositionInUnityG33,
+                __state.RotationInUnityG33);
         }
     }
 
