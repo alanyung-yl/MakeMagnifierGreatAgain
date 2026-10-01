@@ -15,7 +15,7 @@ public record ModMetadata : IModMetadata
     public string Name { get; init; } = "MakeMagnifierGreatAgain";
     public string Author { get; init; } = "alanyung-yl";
     public List<string>? Contributors { get; init; }
-    public Version Version { get; init; } = new("0.5.1");
+    public Version Version { get; init; } = new("0.6.0");
     public Range SptVersion { get; init; } = new("~4.1.0");
     public bool HasPrepatcher { get; init; }
     public List<string>? Incompatibilities { get; init; }
@@ -45,7 +45,7 @@ public sealed class MakeMagnifierGreatAgainServerMod(
         );
 
         logger.Success(
-            "MakeMagnifierGreatAgain 0.5.1: handed custom items, traders, and locales " +
+            "MakeMagnifierGreatAgain 0.6.0: handed custom items, traders, and locales " +
             "registration to WTT-CommonLib."
         );
     }

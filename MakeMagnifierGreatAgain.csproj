@@ -7,7 +7,7 @@
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <AssemblyName>MakeMagnifierGreatAgain</AssemblyName>
     <RootNamespace>MakeMagnifierGreatAgain</RootNamespace>
-    <Version>0.5.4</Version>
+    <Version>0.6.0</Version>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <OutputPath>bin\$(Configuration)\client\</OutputPath>
