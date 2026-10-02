@@ -36,6 +36,26 @@ namespace MakeMagnifierGreatAgain
             var prefabRoot = collectionView.GameObject.transform;
             var templateId = containerCollection.StringTemplateId;
 
+            if (string.Equals(
+                templateId,
+                SkeetIrTemplateId,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                var skeetState = prefabRoot
+                    .GetComponent<SkeetFastRiserSlotState>();
+                if (skeetState == null)
+                {
+                    skeetState = prefabRoot.gameObject
+                        .AddComponent<SkeetFastRiserSlotState>();
+                }
+
+                // Capture the pristine Skeet slot before AttachMods begins
+                // inserting children and before WeaponCustomizer can apply a
+                // saved transform to that slot. Serialized state survives any
+                // subsequent Unity clone of this runtime view.
+                skeetState.CaptureAuthoredPoseIfNeeded(prefabRoot);
+            }
+
             var marker = prefabRoot.GetComponent<UnityFastRiserRuntimeMarker>();
             if (!IsUnityFastRiser(templateId))
             {
@@ -110,6 +130,8 @@ namespace MakeMagnifierGreatAgain
         private const float MinimumRise = 0.0001f;
         private static bool _appliedLogWritten;
         private static bool _childInsertionLogWritten;
+        private static bool _initialChildRebaseLogWritten;
+        private static bool _doubleCompensationRepairLogWritten;
         private static bool _missingSlotWarningWritten;
         private static bool _weaponCustomizerRebaseWarningWritten;
 
@@ -119,6 +141,7 @@ namespace MakeMagnifierGreatAgain
             internal Transform Bone;
             internal Vector3 LocalPosition;
             internal Quaternion LocalRotation;
+            internal Vector3 AuthoredLocalPosition;
         }
 
         [HarmonyPrefix]
@@ -137,7 +160,12 @@ namespace MakeMagnifierGreatAgain
             var skeetState = bone
                 .GetComponentInParent<SkeetFastRiserSlotState>();
             if (skeetState == null
-                || !skeetState.IsManagedChildScopeSlot(bone))
+                || !skeetState.TryGetChildInsertionOrigin(
+                    bone,
+                    out var localPosition,
+                    out var localRotation,
+                    out var authoredLocalPosition,
+                    out var repairedDoubleCompensation))
             {
                 return;
             }
@@ -147,8 +175,18 @@ namespace MakeMagnifierGreatAgain
             // slot refresh instead of deriving another compensation vector.
             __state.IsCaptured = true;
             __state.Bone = bone;
-            __state.LocalPosition = bone.localPosition;
-            __state.LocalRotation = bone.localRotation;
+            __state.LocalPosition = localPosition;
+            __state.LocalRotation = localRotation;
+            __state.AuthoredLocalPosition = authoredLocalPosition;
+
+            if (repairedDoubleCompensation
+                && !_doubleCompensationRepairLogWritten)
+            {
+                _doubleCompensationRepairLogWritten = true;
+                MakeMagnifierGreatAgainPlugin.LogInfo(
+                    "Normalized a cloned Skeet-IR child slot that already "
+                    + "contained a second Unity FAST compensation step.");
+            }
         }
 
         [HarmonyPostfix]
@@ -181,7 +219,8 @@ namespace MakeMagnifierGreatAgain
                         customizedMod,
                         __state.Bone,
                         __state.LocalPosition,
-                        __state.LocalRotation);
+                        __state.LocalRotation,
+                        __state.AuthoredLocalPosition);
 
                 if (!rebased)
                 {
@@ -248,6 +287,30 @@ namespace MakeMagnifierGreatAgain
                 return;
             }
 
+            // Skeet can arrive with a child already assembled. In that path,
+            // WeaponCustomizer's child-slot postfix ran before this outer
+            // Skeet insertion postfix and therefore captured the raised,
+            // authored pose. Rebase that existing owner immediately after the
+            // FAST correction so LateUpdate and Revert both use the corrected
+            // rail-plane origin.
+            var childScopeSlot = skeetState.ChildScopeSlot;
+            var initialCustomizedMod = FindWeaponCustomizerComponent(
+                childScopeSlot);
+            if (initialCustomizedMod != null
+                && TryRebaseWeaponCustomizer(
+                    initialCustomizedMod,
+                    childScopeSlot,
+                    childScopeSlot.localPosition,
+                    childScopeSlot.localRotation,
+                    skeetState.AuthoredLocalPosition)
+                && !_initialChildRebaseLogWritten)
+            {
+                _initialChildRebaseLogWritten = true;
+                MakeMagnifierGreatAgainPlugin.LogInfo(
+                    "Rebased WeaponCustomizer's initially occupied Skeet-IR "
+                    + "child slot onto the corrected Unity FAST rail origin.");
+            }
+
             if (!_appliedLogWritten && compensatedRise >= MinimumRise)
             {
                 _appliedLogWritten = true;
@@ -289,7 +352,8 @@ namespace MakeMagnifierGreatAgain
             Component customizedMod,
             Transform bone,
             Vector3 compensatedPosition,
-            Quaternion compensatedRotation)
+            Quaternion compensatedRotation,
+            Vector3 authoredPosition)
         {
             try
             {
@@ -337,21 +401,44 @@ namespace MakeMagnifierGreatAgain
                 {
                     var savedPosition = (Vector3)savedPositionValue;
 
-                    // A position already closer to the compensated origin
-                    // can come from a drag made while MMGA's prior hard-lock
-                    // build was active. Keep it as-is to avoid applying the
-                    // FAST displacement twice. Older positions based on the
-                    // authored origin retain their user offset on the new
-                    // rail-plane origin.
-                    rebasedPosition = Vector3.Distance(
-                            savedPosition,
-                            compensatedPosition)
-                        <= Vector3.Distance(
-                            savedPosition,
-                            originalPosition)
-                        ? savedPosition
-                        : savedPosition
-                            + (compensatedPosition - originalPosition);
+                    if (IsLikelyDoubleCompensatedPosition(
+                        authoredPosition,
+                        compensatedPosition,
+                        savedPosition))
+                    {
+                        // Older MMGA builds could persist the second FAST
+                        // subtraction as WeaponCustomizer's saved position.
+                        // Treat that exact displacement as poisoned state and
+                        // clear it so Revert resolves to the corrected origin.
+                        hasSavedPosition = false;
+                        rebasedPosition = compensatedPosition;
+
+                        if (!_doubleCompensationRepairLogWritten)
+                        {
+                            _doubleCompensationRepairLogWritten = true;
+                            MakeMagnifierGreatAgainPlugin.LogInfo(
+                                "Cleared a stale WeaponCustomizer position "
+                                + "containing a second Unity FAST "
+                                + "compensation step.");
+                        }
+                    }
+                    else
+                    {
+                        // A position already closer to the compensated origin
+                        // can come from a drag made while MMGA's prior hard-
+                        // lock build was active. Keep it as-is; older positions
+                        // based on the authored origin retain their user offset
+                        // on the new rail-plane origin.
+                        rebasedPosition = Vector3.Distance(
+                                savedPosition,
+                                compensatedPosition)
+                            <= Vector3.Distance(
+                                savedPosition,
+                                originalPosition)
+                            ? savedPosition
+                            : savedPosition
+                                + (compensatedPosition - originalPosition);
+                    }
                 }
 
                 var savedRotationValue = rotationField.GetValue(
@@ -410,6 +497,26 @@ namespace MakeMagnifierGreatAgain
 
                 return false;
             }
+        }
+
+        private static bool IsLikelyDoubleCompensatedPosition(
+            Vector3 authoredPosition,
+            Vector3 compensatedPosition,
+            Vector3 candidatePosition)
+        {
+            const float tolerance = 0.001f;
+            var compensationDelta = compensatedPosition - authoredPosition;
+            if (compensationDelta.sqrMagnitude < 0.00000001f)
+            {
+                return false;
+            }
+
+            var expectedDoublePosition =
+                compensatedPosition + compensationDelta;
+            return Vector3.Distance(
+                    candidatePosition,
+                    expectedDoublePosition)
+                <= tolerance;
         }
 
         private static string FormatMillimetres(Vector3 value)
@@ -471,10 +578,54 @@ namespace MakeMagnifierGreatAgain
 
     internal sealed class SkeetFastRiserSlotState : MonoBehaviour
     {
+        // These fields must be serialized. EFT/Unity can clone an already
+        // compensated runtime view: the transformed child slot is copied with
+        // it, and non-serialized bookkeeping would reset to default. That made
+        // the clone capture its shifted pose as authored and subtract the FAST
+        // displacement a second time.
+        [SerializeField]
         private Transform _childScopeSlot;
+
+        [SerializeField]
         private Vector3 _authoredLocalPosition;
+
+        [SerializeField]
         private Quaternion _authoredLocalRotation;
+
+        [SerializeField]
+        private Vector3 _compensatedLocalPosition;
+
+        [SerializeField]
+        private Quaternion _compensatedLocalRotation;
+
+        [SerializeField]
         private bool _captured;
+
+        [SerializeField]
+        private bool _isCompensated;
+
+        internal Transform ChildScopeSlot => _childScopeSlot;
+
+        internal Vector3 AuthoredLocalPosition => _authoredLocalPosition;
+
+        internal void CaptureAuthoredPoseIfNeeded(Transform skeetRoot)
+        {
+            var childScopeSlot = FindDirectScopeSlot(skeetRoot);
+            if (childScopeSlot == null
+                || (_captured
+                    && ReferenceEquals(_childScopeSlot, childScopeSlot)))
+            {
+                return;
+            }
+
+            _childScopeSlot = childScopeSlot;
+            _authoredLocalPosition = childScopeSlot.localPosition;
+            _authoredLocalRotation = childScopeSlot.localRotation;
+            _compensatedLocalPosition = _authoredLocalPosition;
+            _compensatedLocalRotation = _authoredLocalRotation;
+            _captured = true;
+            _isCompensated = false;
+        }
 
         internal void Restore()
         {
@@ -483,13 +634,51 @@ namespace MakeMagnifierGreatAgain
                 _childScopeSlot.localPosition = _authoredLocalPosition;
                 _childScopeSlot.localRotation = _authoredLocalRotation;
             }
+
+            _isCompensated = false;
         }
 
-        internal bool IsManagedChildScopeSlot(Transform slot)
+        internal bool TryGetChildInsertionOrigin(
+            Transform slot,
+            out Vector3 localPosition,
+            out Quaternion localRotation,
+            out Vector3 authoredLocalPosition,
+            out bool repairedDoubleCompensation)
         {
-            return _captured
-                && slot != null
-                && ReferenceEquals(_childScopeSlot, slot);
+            localPosition = Vector3.zero;
+            localRotation = Quaternion.identity;
+            authoredLocalPosition = Vector3.zero;
+            repairedDoubleCompensation = false;
+
+            if (!_captured
+                || !_isCompensated
+                || slot == null
+                || !ReferenceEquals(_childScopeSlot, slot))
+            {
+                return false;
+            }
+
+            localPosition = slot.localPosition;
+            localRotation = slot.localRotation;
+            authoredLocalPosition = _authoredLocalPosition;
+
+            var compensationDelta =
+                _compensatedLocalPosition - _authoredLocalPosition;
+            var expectedDoublePosition =
+                _compensatedLocalPosition + compensationDelta;
+            if (compensationDelta.sqrMagnitude >= 0.00000001f
+                && Vector3.Distance(
+                    localPosition,
+                    expectedDoublePosition) <= 0.001f)
+            {
+                localPosition = _compensatedLocalPosition;
+                localRotation = _compensatedLocalRotation;
+                slot.localPosition = localPosition;
+                slot.localRotation = localRotation;
+                repairedDoubleCompensation = true;
+            }
+
+            return true;
         }
 
         internal bool TryApply(
@@ -509,14 +698,7 @@ namespace MakeMagnifierGreatAgain
                 return false;
             }
 
-            if (!_captured
-                || !ReferenceEquals(_childScopeSlot, childScopeSlot))
-            {
-                _childScopeSlot = childScopeSlot;
-                _authoredLocalPosition = childScopeSlot.localPosition;
-                _authoredLocalRotation = childScopeSlot.localRotation;
-                _captured = true;
-            }
+            CaptureAuthoredPoseIfNeeded(skeetRoot);
 
             Restore();
 
@@ -535,11 +717,25 @@ namespace MakeMagnifierGreatAgain
             compensatedRise = riserAttachmentOffset.magnitude;
             if (compensatedRise < 0.0001f)
             {
+                CaptureCompensatedPose();
                 return true;
             }
 
             _childScopeSlot.position -= riserAttachmentOffset;
+            CaptureCompensatedPose();
             return true;
+        }
+
+        private void CaptureCompensatedPose()
+        {
+            if (_childScopeSlot == null)
+            {
+                return;
+            }
+
+            _compensatedLocalPosition = _childScopeSlot.localPosition;
+            _compensatedLocalRotation = _childScopeSlot.localRotation;
+            _isCompensated = true;
         }
 
 
