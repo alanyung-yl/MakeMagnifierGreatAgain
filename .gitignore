@@ -26,8 +26,5 @@ Thumbs.db
 # Local design and AI handoff notes
 docs/
 
-# Private SkeetIR development assets
-db/CustomItems/skeet_ir.json
-bundles/skeet-ir*.bundle
-bundles/**/skeet-ir*.bundle
+# Private Unity development assets
 unity/

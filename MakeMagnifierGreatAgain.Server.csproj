@@ -40,6 +40,9 @@
     </PackageReference>
     <Compile Include="src\MakeMagnifierGreatAgainServerMod.cs" />
     <Compile Include="src\MakeMagnifierGreatAgainCompatibilityMod.cs" />
+    <Compile Include="src\SkeetIrIds.cs" />
+    <Compile Include="src\JsocSkeetIrIntegrationMod.cs" />
+    <Compile Include="src\SkeetIrProfileMigration.cs" />
     <ServerResource Include="bundles.json" />
     <ServerResource Include="bundles\**\*" />
     <ServerResource Include="config.json" />

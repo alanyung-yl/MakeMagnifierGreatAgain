@@ -42,7 +42,7 @@ namespace MakeMagnifierGreatAgain
             "scope_base_trijicon_sro";
         private const string TrijiconRmrPrefabName =
             "scope_base_trijicon_rmr";
-        private const string SkeetIrDatabasePrefabName = "scope_eotech_skeet_ir_mmga_test";
+        private const string SkeetIrDatabasePrefabName = SkeetIrIds.PrefabName;
         private const string SkeetIrBundleRootName = "scope_eotech_Skeet_working";
         private const string BackLensShaderName = "CW FX/BackLens";
         private const string OpticSightShaderName = "CW FX/OpticSight";

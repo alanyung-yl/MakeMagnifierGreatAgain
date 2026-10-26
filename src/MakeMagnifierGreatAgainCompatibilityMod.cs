@@ -25,7 +25,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
     private const string EpicHighG33TemplateId = "31d49a6fcf9e8c1864d7e420";
     private const string EpicUh1HighG33TemplateId = "31d49a6fcf9e8c1864d7e430";
     private const string EpicExps3LowG33TemplateId = "31d49a6fcf9e8c1864d7e440";
-    private const string SkeetIrTemplateId = "31d49a6fcf9e8c1864d7e410";
+    private const string SkeetIrTemplateId = SkeetIrIds.Template;
     private const string Lt101RiserTemplateId = "5c064c400db834001d23f468";
     private const string EpicUnityFastRiserBlackTemplateId = "2e681ada9836f6e030080191";
     private const string EpicUnityFastRiserFdeTemplateId = "e1543def58291668bac8e2c8";

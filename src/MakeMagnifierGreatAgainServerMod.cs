@@ -23,6 +23,7 @@ public record ModMetadata : IModMetadata
     {
         ["com.wtt.commonlib"] = new Range("~3.0.6"),
         ["com.epicrangetime.aio"] = new Range("~5.0.1"),
+        ["com.c11.jsoc"] = new Range("~3.0.0"),
     };
     public string? Url { get; init; }
     public string License { get; init; } = "GPL-3.0-only";

@@ -1,123 +1,101 @@
-# MakeMagnifierGreatAgain (SPT 4.1.3)
+﻿# Make Magnifier Great Again
 
-MakeMagnifierGreatAgain is an experimental SPT mod that separates magnifiers and thermal clip-ons from their original combined optics, then lets them accept ordinary attachments.
+Make Magnifier Great Again lets you pair standalone G33 magnifiers and the SkeetIR thermal clip-on with your choice of compatible sights, scopes, and mounts in SPT.
 
-Version 0.6.0 expands the standalone G33 lineup using EpicAIO's assets, improves nested reticle handling, and adds WeaponCustomizer-aware SkeetIR placement for SPT 4.1.3. This remains a proof-of-concept release rather than a production-ready compatibility layer.
+**Version 0.7.0 · For SPT 4.1.6 · Experimental**
 
 [![](https://img.shields.io/github/v/release/alanyung-yl/MakeMagnifierGreatAgain?display_name=tag&sort=semver)](https://github.com/alanyung-yl/MakeMagnifierGreatAgain/releases/latest)
 [![](https://img.shields.io/github/downloads/alanyung-yl/MakeMagnifierGreatAgain/total)](https://github.com/alanyung-yl/MakeMagnifierGreatAgain/releases)
 
-## Compatibility
+## What you can do
 
-- Built and tested on `SPT 4.1.3`
-- Requires `WTT-CommonLib 3.0.6`
-- Requires `Epic's All In One 5.0.1`
-- Integrates with `Tyfon.WeaponCustomizer 4.0.0`; WeaponCustomizer is not a required dependency
-- Tested with `WTT-Armory`, `Epic's All In One`, and `JSOC`
-- Other SPT or dependency versions may work, but are not guaranteed
+- Pair one of four standalone EOTech G33 magnifiers with compatible 1x sights and risers.
+- Use JSOC's Trijicon SkeetIR-L as a thermal clip-on with compatible standalone sights and scopes.
+- Flip the G33 between 1x and 3x and toggle thermal vision using the game's normal optic controls.
+- Adjust compatible setups with WeaponCustomizer to help with placement and model clipping.
 
-## Features
+See [Modding Samples](MODDING-SAMPLES.md) for a configuration gallery with space for screenshots.
 
-- Four standalone EOTech G33 magnifier variants
-- Trijicon SkeetIR-L thermal clip-on test item
-- Inline and flipped modes using EFT's normal optic controls: `Switch Between Sights` toggles thermal vision, `Change Scope Magnification` toggles the G33 between inline and flip positions (1-3x)
-- A functional front `mod_scope` slot on each MMGA item for compatible sights, risers, and mounts
-- Reticle propagation into the G33 PiP
-- Thermal reticle projection
-- Unity FAST riser height compensation for SkeetIR assemblies
-- WeaponCustomizer-aware rebasing of compensated child-slot positions
 
-## Included Items
+## Installation and updates
 
-### EOTech G33 Magnifiers
+1. Install the dependencies listed above.
+2. If you previously customized `SPT_Runtime\user\mods\MakeMagnifierGreatAgain\config.json`, back it up as a reference.
+3. Extract the release archive directly into your SPT installation folder.
+4. Replace all existing FoldThatStock files, including `config.json`.
+5. Reapply any desired custom settings by replacing `config.json` with the backed up `config.json`, then start SPT normally.
 
-- `EOTECH G33 Magnifier`
-- `EOTECH G33 Magnifier (Tan)`
-- `EOTECH G33 Magnifier w/ Unity FAST FTC OMNI (FDE)`
-- `EOTECH G33 Magnifier w/ Unity FAST FTC OMNI`
 
-All four are available from Peacekeeper at loyalty level 1. They accept pure 1x optics and risers that is compatible to a 1x sight. Magnified scope mounts and incompatible mounts are excluded. The G33 variants conflict with themselves and one another, limiting an assembly to one MMGA G33.
+## Available optics
 
-The FDE, black, and tan variants reuse EpicAIO's EXPS3 high, UH-1 high, and EXPS3 low pair prefabs respectively. MMGA suppresses each baked donor sight and reticle, creates a live child slot, and preserves the original EpicAIO item when its prefab instance is reused. The FDE adapter keeps the active `ftc_riser` transform hierarchy and original aim bone while disabling only its captured non-G33 renderers; this retains the donor's 3x housing size without displaying the baked riser or EXPS3.
+### EOTech G33 magnifiers
 
-### SkeetIR Thermal Clip-On
+- EOTECH G33 Magnifier
+- EOTECH G33 Magnifier (Tan)
+- EOTECH G33 Magnifier w/ Unity FAST FTC OMNI (FDE)
+- EOTECH G33 Magnifier w/ Unity FAST FTC OMNI
 
-- `EOTech EXPS3 with Trijicon SkeetIR-L (MMGA test)`
+All four accept compatible 1x sights and risers. Magnified scopes and incompatible mounts are excluded.
 
-The SkeetIR test item is available from Peacekeeper at loyalty level 1. It provides inline and folded 1x modes and accepts ordinary 1x and magnified sights while excluding night/thermal optics, offset mounts, and incompatible mounts. For magnified child sights, MMGA applies the thermal shader to the child `mod_scope` sight's PiP and disables SkeetIR's physical render while the player is aiming down sights; if this behavior is compatible with FIKA, other players in the session should not see the physical SkeetIR while it is being aimed through.
+### Trijicon SkeetIR-L thermal clip-on
 
-When SkeetIR is installed directly on EpicAIO's black or FDE Unity FAST optic riser, MMGA lowers only SkeetIR's child `mod_scope` by that riser's displacement. SkeetIR remains on the raised platform while its child optic returns to the weapon-rail plane. If WeaponCustomizer controls that slot, MMGA moves its saved and current placement to the corrected position while keeping normal dragging. Other risers are not changed.
+MMGA upgrades JSOC's SkeetIR with a slot for compatible 1x sights and magnified scopes. It supports inline and folded modes, with thermal vision available through compatible attached optics. Night-vision optics, other thermal optics, offset mounts, and incompatible mounts are excluded.
+
+When SkeetIR is equipped on EpicAIO's black and FDE Unity FAST optic risers, MMGA also adjusts the attached sight's height to help align the setup.
 
 ## Controls
 
-Use EFT's normal controls:
+Use your configured EFT keybinds:
 
-- `Switch Between Sights` changes the active sight or thermal selector
-- `Change Scope Magnification` changes the active magnifier or optic mode
+| Control | Action |
+| --- | --- |
+| Switch Between Sights | Switch the active sight or toggle SkeetIR thermal vision, depending on the setup |
+| Change Scope Magnification | Flip the G33 between 1x and 3x, or change the active optic's mode |
 
-Exact behavior depends on the installed sight stack. For the supported
-SkeetIR + custom G33 + Wilcox BOSS route, `Switch Between Sights` toggles
-thermal vision and `Change Scope Magnification` toggles the G33 between inline
-and flip positions.
+The exact behavior depends on the sights attached to your weapon.
 
-## Installation and Updates
+## Compatibility and known issues
 
-1. Install WTT-CommonLib 3.0.6 and Epic's All In One 5.0.1.
-2. Extract the MMGA release archive directly into the SPT installation folder.
-3. Replace existing MMGA files when updating.
-4. Restart both the SPT server and game.
-5. Purchase the test items from Peacekeeper LL1.
+- **G33 aiming alignment:** Testing suggests that point of aim (POA) and point of impact (POI) are slightly off with certain combinations when an MMGA G33 is in use. The cause is still being investigated.
+- **SkeetIR with a standalone sight or scope:** Testing has shown no POA/POI issue with these setups.
+- **Wilcox BOSS:** BOSS is not yet supported with MMGA G33. It can be used with SkeetIR.
+- **Sight alignment:** A 1x sight needs to line up with the clip-on or magnifier for a centered view. SkeetIR has no reticle of its own, so you still aim using the attached sight.
+- **Clipping and placement:** Some combinations may overlap visually. WeaponCustomizer is recommended for adjusting compatible setups.
+- **Other optics:** Some sights, mounts, or unusual combinations may display an incorrect scope image or behave unexpectedly.
 
-## Configuration
+MMGA is experimental. If you encounter a problem, please include the sights, mounts, risers, and mod versions used, along with a screenshot of the setup.
 
-The server configuration is located at:
+## Optional configuration
+
+Most players can leave the default settings unchanged. To allow an additional custom sight or riser, add its item template ID to `additionalWhitelistIds` in:
 
 ```text
 SPT_Runtime/user/mods/MakeMagnifierGreatAgain/config.json
 ```
 
-Add item template IDs to `additionalWhitelistIds` to explicitly include custom
-risers or sights in MMGA's G33-compatible discovery results:
-
 ```json
 {
   "additionalWhitelistIds": [
-    "example_item_template_id",
     "example_item_template_id"
   ]
 }
 ```
 
-Restart the server after changing the configuration. Explicit entries still
-need a usable EFT-style attachment structure at runtime.
-
-## Known Limitations
-
-- MMGA is still an experimental proof of concept.
-- A 1x sight's collimator must be aligned with the SkeetIR & G33 centerline for its reticle to appear centered in view. SkeetIR does not have its own reticle, and MMGA does not project the 1x reticle into the SkeetIR PiP; the player is still aiming through the 1x sight while SkeetIR adds the thermal view.
-- G33 nested reticles may retain a small positional or point-of-impact offset.
-- Point of aim and point of impact are not perfectly consistent in every assembly. Even the real-world EXPS3 + Unity FTC riser + Unity FAST FTC OMNI G33 riser arrangement may show a slight offset, and the exact cause is not yet confirmed.
-- Some optics or unusually structured assemblies may produce an incorrect PiP image or behave unexpectedly.
-- Because MMGA uses fixed `mod_scope` positions, models may clip into one another. WeaponCustomizer is highly recommended for adjusting compatible assemblies.
-- Mod compatibility is not fully tested. Reports of incompatible sights, mounts, risers, or assemblies are greatly appreciated.
-- Compatibility depends on other mods using recognizable EFT optic, cache, and attachment-slot structures.
+Restart the server after editing. Adding an item to this list does not guarantee that its model or attachment layout will work correctly.
 
 ## Uninstall
 
-Remove both installed locations:
+Remove MMGA custom items from your weapons and inventory first, then remove both folders:
 
 - `BepInEx/plugins/MakeMagnifierGreatAgain`
 - `SPT_Runtime/user/mods/MakeMagnifierGreatAgain`
 
-Remove MMGA custom items from weapons and inventory before uninstalling to avoid leaving missing custom templates in an existing profile.
-
 ## Credits
 
-- SkeetIR model and JSOC integration by [bobinstien](https://github.com/c11gunworks-lab/JSOC). MMGA includes a modified SkeetIR bundle with the author's permission. The original JSOC projects are available at [JSOC](https://github.com/c11gunworks-lab/JSOC) and [Spy's JSOC-SWR](https://github.com/SpyPilotEFT/Spys-JSOC-SWR).
-- EOTech G33, EXPS3, UH-1, and Unity FAST assets provided by [EpicRangeTime's Epic's All In One](https://github.com/EpicRangeTime/EpicRangeTime-Weapons).
+- **EpicAIO author [EpicRangeTime](https://sp-mod.com/user/36153/epicrangetime)** — Thank you for permission to use the EOTech G33, EXPS3, UH-1, and Unity FAST assets from [Epic's All In One](https://github.com/EpicRangeTime/EpicRangeTime-Weapons).
+- **JSOC author [bobinstien](https://github.com/c11gunworks-lab/JSOC)** — Thank you for permission to use and modify the SkeetIR assets. See [JSOC](https://github.com/c11gunworks-lab/JSOC) and [Spy's JSOC-SWR](https://github.com/SpyPilotEFT/Spys-JSOC-SWR) for the original projects.
 - Thanks to the original authors and contributors for creating and maintaining these assets.
 
 ## License
 
-MakeMagnifierGreatAgain is licensed under the
-[GNU General Public License v3.0](LICENSE).
+MakeMagnifierGreatAgain is licensed under the [GNU General Public License v3.0](LICENSE).

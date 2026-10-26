@@ -15,7 +15,7 @@ namespace MakeMagnifierGreatAgain
     internal static class SkeetFastRiserAssemblyPatch
     {
         internal const string SkeetIrTemplateId =
-            "31d49a6fcf9e8c1864d7e410";
+            SkeetIrIds.Template;
         internal const string UnityFastRiserBlackTemplateId =
             "2e681ada9836f6e030080191";
         internal const string UnityFastRiserFdeTemplateId =

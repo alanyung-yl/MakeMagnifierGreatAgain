@@ -47,6 +47,7 @@
 
   <ItemGroup>
     <Compile Include="src\MakeMagnifierGreatAgainPlugin.cs" />
+    <Compile Include="src\SkeetIrIds.cs" />
     <Compile Include="src\MakeMagnifierGreatAgainEpicHighG33PrefabPatch.cs" />
     <Compile Include="src\MakeMagnifierGreatAgainNestedSightAimPatch.cs" />
     <Compile Include="src\MakeMagnifierGreatAgainSkeetFastRiserPatch.cs" />
