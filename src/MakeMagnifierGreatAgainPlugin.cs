@@ -8,7 +8,7 @@ namespace MakeMagnifierGreatAgain
     {
         public const string PluginGuid = "com.alanyung-yl.makemagnifiergreatagain";
         public const string PluginName = "MakeMagnifierGreatAgain";
-        public const string PluginVersion = "0.6.0";
+        public const string PluginVersion = "0.7.1";
 
         internal static MakeMagnifierGreatAgainPlugin Instance { get; private set; }
 

@@ -331,6 +331,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             .Where(id =>
                 templateTable.Items.TryGetValue(id, out var item)
                 && IsScopeCarrier(item)
+                && !IsMagnifiedSight(item)
                 && !platformBoundCarrierIds.Contains(id)
                 && !ExplicitlyExcludedMountIds.Contains(id)
                 && !HasExcludedMountWording(item)
@@ -433,7 +434,11 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         // reachable through one or more mixed risers/scope mounts.
         var nonOnePowerSightIds = templateTable.Items.Values
             .Where(item => IsSight(item)
-                && !onePowerCandidates.Contains(item.Id))
+                && !onePowerCandidates.Contains(item.Id)
+                // Composite 1x optics can be mount-category carriers while
+                // retaining their donor sight's Zooms (e.g. ROMEO9t housings).
+                // An accepted carrier must not conflict with its own G33 host.
+                && !g33Carriers.Contains(item.Id))
             .Select(item => item.Id)
             .Where(id =>
                 !id.Equals(g33Id)
@@ -563,16 +568,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             epicExps3LowG33Id
         );
 
-        ValidateEpicUnityFastRiserFilters(
-            epicUnityFastRiserFilters,
-            g33Discovered,
-            g33Id,
-            epicHighG33Id,
-            epicUh1HighG33Id,
-            epicExps3LowG33Id,
-            skeetIrId);
-
-        ValidateRootFilters(
+        var rejectedG33RootIds = ValidateRootFilters(
             templateTable,
             g33Template,
             epicHighG33Template,
@@ -585,9 +581,26 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             epicExps3LowTargetFilter,
             skeetIrTargetFilter,
             onePowerCandidates,
+            g33Carriers,
             excludedVisionDeviceIds,
             platformBoundCarrierIds,
             userWhitelistIds);
+
+        // Keep the shared riser whitelist consistent if conservative root
+        // validation removed a candidate. Do not propagate rejected choices.
+        g33Discovered.ExceptWith(rejectedG33RootIds);
+        foreach (var (_, filter) in epicUnityFastRiserFilters)
+        {
+            filter.Filter?.ExceptWith(rejectedG33RootIds);
+        }
+        ValidateEpicUnityFastRiserFilters(
+            epicUnityFastRiserFilters,
+            g33Discovered,
+            g33Id,
+            epicHighG33Id,
+            epicUh1HighG33Id,
+            epicExps3LowG33Id,
+            skeetIrId);
 
         var rejectedG33ScopeMountCount = g33CarrierCandidates.Count(id =>
             templateTable.Items.TryGetValue(id, out var item)
@@ -694,7 +707,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         }
     }
 
-    private static void ValidateRootFilters(
+    private HashSet<MongoId> ValidateRootFilters(
         TemplateTable templateTable,
         TemplateItem g33Template,
         TemplateItem epicHighG33Template,
@@ -707,6 +720,7 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
         SlotFilter epicExps3LowG33Filter,
         SlotFilter? skeetFilter,
         HashSet<MongoId> onePowerOptics,
+        HashSet<MongoId> g33Carriers,
         HashSet<MongoId> excludedVisionDeviceIds,
         HashSet<MongoId> platformBoundCarrierIds,
         HashSet<MongoId> userWhitelistIds)
@@ -739,20 +753,20 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             "EpicAIO black G33",
             "EpicAIO tan G33",
         ];
+        var rejectedG33Ids = new HashSet<MongoId>();
         for (var index = 0; index < variantFilters.Length; index++)
         {
-            ValidateG33RootFilter(
+            rejectedG33Ids.UnionWith(ValidateG33RootFilter(
                 variantLabels[index],
-                templateTable,
                 variantFilters[index],
                 onePowerOptics,
-                platformBoundCarrierIds,
-                userWhitelistIds);
+                g33Carriers,
+                userWhitelistIds));
         }
 
         if (skeetFilter?.Filter == null)
         {
-            return;
+            return rejectedG33Ids;
         }
 
         MongoId skeetId = SkeetIrTemplateId;
@@ -799,35 +813,33 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
             throw new InvalidOperationException(
                 "MakeMagnifierGreatAgain: Skeet unexpectedly accepts ECHO1 or its UNV DLOC IRD base.");
         }
+        return rejectedG33Ids;
     }
 
-    private static void ValidateG33RootFilter(
+    private MongoId[] ValidateG33RootFilter(
         string label,
-        TemplateTable templateTable,
         SlotFilter filter,
         HashSet<MongoId> onePowerOptics,
-        HashSet<MongoId> platformBoundCarrierIds,
+        HashSet<MongoId> g33Carriers,
         HashSet<MongoId> userWhitelistIds)
     {
+        // Use the same classification as discovery. A carrier can retain
+        // sight properties from its clone donor without being a standalone
+        // collimator-category item. Reclassifying it here caused startup to
+        // reject ROMEO9t after deliberately admitting it as a valid carrier.
         var invalidIds = (filter.Filter ?? []).Where(id =>
             !userWhitelistIds.Contains(id)
-            && templateTable.Items.TryGetValue(id, out var item)
-            && ((IsSight(item) && !onePowerOptics.Contains(id))
-                || (IsScopeCarrier(item)
-                    && (platformBoundCarrierIds.Contains(id)
-                        || ExplicitlyExcludedMountIds.Contains(id)
-                        || HasExcludedMountWording(item)
-                        || AcceptsMagnifiedScope(
-                            item,
-                            templateTable,
-                            userWhitelistIds)))))
+            && !onePowerOptics.Contains(id)
+            && !g33Carriers.Contains(id))
             .ToArray();
         if (invalidIds.Length > 0)
         {
-            throw new InvalidOperationException(
-                $"MakeMagnifierGreatAgain: {label} root filter validation failed for: "
+            filter.Filter!.ExceptWith(invalidIds);
+            logger.Warning(
+                $"MakeMagnifierGreatAgain: removed unsupported entries from {label} root filter: "
                     + string.Join(", ", invalidIds));
         }
+        return invalidIds;
     }
 
     private static HashSet<string> LoadAdditionalWhitelistIds(
@@ -1040,7 +1052,8 @@ public sealed class MakeMagnifierGreatAgainCompatibilityMod(
 
                 if (IsScopeCarrier(child))
                 {
-                    var isEligible = !platformBoundCarrierIds.Contains(childId)
+                    var isEligible = !IsMagnifiedSight(child)
+                        && !platformBoundCarrierIds.Contains(childId)
                         && !ExplicitlyExcludedMountIds.Contains(childId)
                         && !HasExcludedMountWording(child)
                         && !AcceptsMagnifiedScope(

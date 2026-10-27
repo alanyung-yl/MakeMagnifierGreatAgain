@@ -2,8 +2,6 @@
 
 Make Magnifier Great Again lets you pair standalone G33 magnifiers and the SkeetIR thermal clip-on with your choice of compatible sights, scopes, and mounts in SPT.
 
-**Version 0.7.0 · For SPT 4.1.6 · Experimental**
-
 [![](https://img.shields.io/github/v/release/alanyung-yl/MakeMagnifierGreatAgain?display_name=tag&sort=semver)](https://github.com/alanyung-yl/MakeMagnifierGreatAgain/releases/latest)
 [![](https://img.shields.io/github/downloads/alanyung-yl/MakeMagnifierGreatAgain/total)](https://github.com/alanyung-yl/MakeMagnifierGreatAgain/releases)
 
